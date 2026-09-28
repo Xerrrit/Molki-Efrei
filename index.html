@@ -1,1 +1,136 @@
 
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Mölkky AR</title>
+<script src="https://cdn.jsdelivr.net/npm/aframe@1.5.0/dist/aframe-master.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@ar-js-org/ar.js@3.4.5/aframe/build/aframe-ar.js"></script>
+<style>
+:root{--panel:rgba(20,16,14,.86);--ink:#f4ecdf;--wood:#c98a4b}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0;height:100%;background:#000;color:var(--ink);font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;overflow:hidden}
+html{scroll-padding-top:env(safe-area-inset-top,0)}
+a-scene{position:fixed;inset:0}
+.hud{position:fixed;left:0;right:0;z-index:10;padding:10px 14px;text-align:center;pointer-events:none}
+.top{top:0;padding-top:calc(10px + env(safe-area-inset-top,0));background:linear-gradient(rgba(0,0,0,.55),transparent)}
+.bottom{bottom:0;padding-bottom:calc(10px + env(safe-area-inset-bottom,0))}
+.pill{display:inline-block;background:var(--panel);border-radius:10px;padding:8px 16px;font-size:13px;border:1px solid rgba(255,255,255,.08)}
+.hidden{display:none!important}
+</style>
+</head>
+<body>
+
+<div class="hud top"><div class="pill" id="markerHint">Pointe la caméra vers le marqueur Hiro (imprime "AR.js Hiro marker")</div></div>
+<div class="hud bottom"><div class="pill" id="msg">Saisis le bâton à l'écran et lâche pour lancer</div></div>
+
+<a-scene embedded arjs="sourceType: webcam; debugUIEnabled: false; detectionMode: mono_and_matrix;" vr-mode-ui="enabled: false" renderer="antialias:true;alpha:true">
+ <a-marker preset="hiro" id="marker">
+  <a-entity id="rig" scale="0.3 0.3 0.3">
+   <a-entity id="pins"></a-entity>
+   <a-box id="stick" width="0.05" height="0.05" depth="0.4" color="#c98a4b" position="0 0.05 1.3"></a-box>
+   <a-plane rotation="-90 0 0" width="3" height="3" color="#2e5c33" opacity="0.35"></a-plane>
+  </a-entity>
+ </a-marker>
+ <a-entity camera></a-entity>
+</a-scene>
+
+<script>
+const LAYOUT=[[0,-1.00,1],[-0.15,-0.85,2],[0.15,-0.85,3],[-0.30,-0.65,4],[0,-0.70,5],[0.30,-0.65,6],
+[-0.45,-0.45,7],[-0.15,-0.50,8],[0.15,-0.50,9],[0.45,-0.45,10],[-0.60,-0.25,11],[0.60,-0.25,12]];
+const HIT_R=0.16, STICK_START={x:0,y:0.05,z:1.3};
+
+let pins=[], stick={vx:0,vz:0,moving:false,hits:new Set()}, grabbing=false, drag=null;
+
+function $(id){return document.getElementById(id)}
+
+function buildPins(){
+ const wrap=$('pins'); wrap.innerHTML=''; pins=[];
+ LAYOUT.forEach(([x,z,num])=>{
+  const h=0.14+num*0.025;
+  const g=document.createElement('a-entity');
+  g.setAttribute('position',`${x} 0 ${z}`);
+  const body=document.createElement('a-cylinder');
+  body.setAttribute('radius',0.035); body.setAttribute('height',h);
+  body.setAttribute('position',`0 ${h/2} 0`);
+  body.setAttribute('color','#b9915f');
+  const label=document.createElement('a-text');
+  label.setAttribute('value',num); label.setAttribute('align','center');
+  label.setAttribute('color','#241a10'); label.setAttribute('width',2);
+  label.setAttribute('position',`0 ${h+0.05} 0`); label.setAttribute('rotation','-90 0 0');
+  g.appendChild(body); g.appendChild(label);
+  wrap.appendChild(g);
+  pins.push({el:g,x,z,num,standing:true});
+ });
+}
+buildPins();
+
+function resetStick(){
+ stick.vx=0; stick.vz=0; stick.moving=false; stick.hits=new Set();
+ $('stick').setAttribute('position',STICK_START);
+}
+
+function beginThrow(dx,dy){
+ if(stick.moving) return;
+ const power=Math.min(Math.max(Math.hypot(dx,dy)/55,0.5),1.7);
+ const aim=Math.max(-0.55,Math.min(0.55,-dx/150));
+ stick.vx=aim*power; stick.vz=-power; stick.moving=true; stick.hits=new Set();
+ $('msg').textContent='Lancé !';
+}
+
+setInterval(()=>{
+ if(!stick.moving) return;
+ const el=$('stick'); const pos=el.getAttribute('position');
+ pos.x+=stick.vx*0.05; pos.z+=stick.vz*0.05;
+ stick.vx*=0.93; stick.vz*=0.93;
+ el.setAttribute('position',pos);
+ pins.forEach(p=>{
+  if(p.standing && !stick.hits.has(p.num)){
+   const d=Math.hypot(pos.x-p.x,pos.z-p.z);
+   if(d<HIT_R){ stick.hits.add(p.num); knockPin(p); }
+  }
+ });
+ const speed=Math.hypot(stick.vx,stick.vz);
+ if(speed<0.02 || pos.z<-1.35 || Math.abs(pos.x)>1.1){ stick.moving=false; finishThrow(); }
+},16);
+
+function knockPin(p){
+ p.standing=false;
+ p.el.setAttribute('animation','property: rotation; to: 78 0 40; dur: 220; easing: easeOutQuad');
+}
+function standPin(p){
+ p.standing=true;
+ p.el.setAttribute('animation','property: rotation; to: 0 0 0; dur: 260; easing: easeOutQuad');
+}
+
+function finishThrow(){
+ const n=stick.hits.size;
+ $('msg').textContent = n>0 ? (n+' quille'+(n>1?'s':'')+' touchée'+(n>1?'s':'')+' !') : 'Raté.';
+ setTimeout(()=>{
+  pins.forEach(p=>{ if(!p.standing) standPin(p); });
+  resetStick();
+  setTimeout(()=>$('msg').textContent="Saisis le bâton à l'écran et lâche pour lancer",600);
+ },700);
+}
+
+function projectStick(){
+ const scene=document.querySelector('a-scene'); if(!scene||!scene.camera) return null;
+ const el=$('stick'); const v=new THREE.Vector3();
+ el.object3D.getWorldPosition(v); v.project(scene.camera);
+ return {x:(v.x*0.5+0.5)*window.innerWidth, y:(-v.y*0.5+0.5)*window.innerHeight};
+}
+window.addEventListener('pointerdown',e=>{
+ if(stick.moving) return;
+ const sp=projectStick(); if(!sp) return;
+ if(Math.hypot(e.clientX-sp.x,e.clientY-sp.y)<70){ grabbing=true; drag={x:e.clientX,y:e.clientY}; }
+});
+window.addEventListener('pointerup',e=>{
+ if(!grabbing) return; grabbing=false;
+ beginThrow(e.clientX-drag.x, e.clientY-drag.y);
+});
+document.querySelector('a-marker').addEventListener('markerFound',()=>$('markerHint').classList.add('hidden'));
+document.querySelector('a-marker').addEventListener('markerLost',()=>$('markerHint').classList.remove('hidden'));
+</script>
+</body>
+</html>
