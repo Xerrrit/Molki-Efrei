@@ -93,20 +93,23 @@
         </a-camera>
       </a-entity>
 
-      <!-- Manette gauche : Déplacement (Stick) + Laser -->
-      <a-entity id="leftHand"
-                laser-controls="hand: left"
-                oculus-touch-controls="hand: left"
-                windows-motion-controls="hand: left"
-                generic-tracked-controller-controls="hand: left">
-      </a-entity>
+      <a-entity id="HandsOffset" position="0 0 -0.3">
 
-      <!-- Manette droite : Rotation (Stick) + Laser -->
-      <a-entity id="rightHand"
-                laser-controls="hand: right"
-                oculus-touch-controls="hand: right"
-                windows-motion-controls="hand: right"
-                generic-tracked-controller-controls="hand: right">
+        <!-- Manette gauche : Déplacement (Stick) + Laser -->
+        <a-entity id="leftHand"
+                  laser-controls="hand: left"
+                  oculus-touch-controls="hand: left"
+                  windows-motion-controls="hand: left"
+                  generic-tracked-controller-controls="hand: left">
+        </a-entity>
+
+        <!-- Manette droite : Rotation (Stick) + Laser -->
+        <a-entity id="rightHand"
+                  laser-controls="hand: right"
+                  oculus-touch-controls="hand: right"
+                  windows-motion-controls="hand: right"
+                  generic-tracked-controller-controls="hand: right">
+        </a-entity>
       </a-entity>
     </a-entity>
 
@@ -160,6 +163,14 @@
         });
 
         this.camEl = cam;
+
+        const scene = this.el.sceneEl;
+        scene.addEventListener('enter-vr', () => {
+          this.cameraPitchEl.setAttribute('position', { x:0, y: 0, z: 0});
+        });
+        scene.addEventListener('exit-vr', () => {
+          this.cameraPitchEl.setAttribute('position', {x: 0, y: 1, z: 0});
+        });
       },
 
       tick: function (time, timeDelta) {
@@ -279,17 +290,18 @@
 
     // ===== Réglages du lancer =====
     const GRAVITY = 9.8;
-    const FRICTION = 1.8;          // plus grand = la barre s'arrête plus vite au sol
+    const FRICTION = 1.1;          // plus grand = la barre s'arrête plus vite au sol
     const STICK_Y = 0.05;          // hauteur de la barre posée au sol
     const HOLD_OFFSET = new THREE.Vector3(0, 0, -0.12); // barre un peu devant la main
 
     // ===== Composant de la barre =====
     AFRAME.registerComponent('molkky-stick', {
       schema: {
-        grabDist: { default: 0.4 },       
+        grabDist: { default: 0.5 },       
         returnDelay: { default: 3000 },   // attente 
-        minSpeed: { default: 2 },         
-        maxSpeed: { default: 8 }          
+        minSpeed: { default: 4 },         
+        maxSpeed: { default: 12 },
+        lift: {default:0.3}         
       },
 
       init() {
@@ -311,12 +323,13 @@
         this.flyTime = 0;
         this.returnT = 0;
         this.landed = false;
+        this.history = [];
         this.marker = $('aimMarker');
 
         $('actionMsg').textContent = 'Attrape la barre au sol (gâchette)';
 
         ['leftHand', 'rightHand'].forEach(id => {
-          const h = $(id);
+          const h = $(rightHand);
           h.addEventListener('triggerdown', () => this.onDown(h));
           h.addEventListener('triggerup', () => this.onUp(h));
           h.addEventListener('gripdown', () => this.onDown(h));
@@ -326,6 +339,7 @@
 
       // ----- 1. Attraper / viser -----
       onDown(h) {
+        this.history.length = 0;
         if (this.state === 'ground') {
           h.object3D.getWorldPosition(this.tmp);
           if (this.tmp.distanceTo(this.el.object3D.position) > this.data.grabDist) return;
@@ -349,7 +363,9 @@
         this.hand.object3D.getWorldQuaternion(this.handQuat);
         if (dt > 0) {
           this.tmp.copy(this.handPos).sub(this.handPrev).divideScalar(dt);
-          this.handVel.lerp(this.tmp, 0.4); // lissage de la vitesse de la main
+          this.handVel.lerp(this.tmp, 0.4);
+          this.history.push(this.handVel.length());
+          if(this.history.length > 10) this.history.shift();
         }
         this.handPrev.copy(this.handPos);
       },
@@ -379,12 +395,15 @@
         this.marker.object3D.visible = false;
       },
 
-      // ----- 2. Lancer -----
+      // ----- Le lancé -----
       throwStick() {
-        this.dir.set(0, 0, -1).applyQuaternion(this.handQuat);   // direction = laser
+        const peak = Math.max(0, ...this.history);                 // pic de vitesse du geste
         const speed = THREE.MathUtils.clamp(
-          this.handVel.length(), this.data.minSpeed, this.data.maxSpeed
-        );                                                        // puissance = geste
+        peak * this.data.boost, this.data.minSpeed, this.data.maxSpeed
+        );
+        this.dir.set(0, 0, -1).applyQuaternion(this.handQuat);     // direction = laser
+        this.dir.y += this.data.lift;                              // un peu d'arc
+        this.dir.normalize();
         this.vel.copy(this.dir).multiplyScalar(speed);
         this.hits.clear();
         this.flyTime = 0;
@@ -393,7 +412,7 @@
         this.state = 'flying';
         $('statusMsg').textContent = 'Partie en cours';
         $('actionMsg').textContent = 'Lancé !';
-      },
+},
 
       fly(dt) {
         const o = this.el.object3D;
