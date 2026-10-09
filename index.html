@@ -343,7 +343,9 @@
         this.history.length = 0;
         if (this.state === 'ground') {
           h.object3D.getWorldPosition(this.tmp);
-          if (this.tmp.distanceTo(this.el.object3D.position) > this.data.grabDist) return;
+          const s = this.el.object3D.position;
+          const d = Math.hypot(this.tmp.x - s.x, this.tmp.z - s.z);  // distance horizontale
+          if (d > this.data.grabDist) return;
           this.hand = h;
           this.readHand(0);
           this.handVel.set(0, 0, 0);
