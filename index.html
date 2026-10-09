@@ -70,13 +70,15 @@
 
     <!-- Joueur (Camera Rig) -->
     <a-entity id="rig" position="0 0 0" vr-stick-movement>
-    <a-camera 
+    <a-entity id="cameraPitch" position="0 1.6 0">
+      <a-camera 
         id="camera" 
-        position="0 1.6 0" 
+        position="0 0 0" 
         look-controls="pointerLockEnabled: false" 
         wasd-controls="acceleration: 25">
         <a-cursor fuse="false" color="#ffffff" opacity="0.5" raycaster="objects: .clickable"></a-cursor>
-    </a-camera>
+      </a-camera>
+    </a-entity>
 
     <!-- Manette gauche : Déplacement (Stick) + Laser -->
     <a-entity id="leftHand" 
@@ -117,15 +119,17 @@
     AFRAME.registerComponent('vr-stick-movement', {
     init: function () {
         this.moveSpeed = 0.05;       // Vitesse de marche
-        this.turnSpeed = 2.0;        // Vitesse de rotation (degrés/frame)
+        this.turnSpeed = 90;         // Vitesse de rotation horizontale (degrés/seconde)
+        this.pitchSpeed = 70;        // Vitesse d'inclinaison verticale (degrés/seconde)
         this.deadZone = 0.15;        // Zone morte pour éviter le drift
         
         this.moveAxes = [0, 0];      // [x, y] stick gauche
-        this.turnAxis = 0;           // x stick droit
+        this.turnAxis = [0, 0];      // [x, y] stick droit
 
         const leftHand = document.getElementById('leftHand');
         const rightHand = document.getElementById('rightHand');
         const cam = document.getElementById('camera');
+        this.cameraPitchEl = document.getElementById('cameraPitch');
 
         // Écoute du joystick gauche (Déplacement)
         leftHand.addEventListener('axismove', (e) => {
@@ -139,19 +143,32 @@
         // Écoute du joystick droit (Rotation)
         rightHand.addEventListener('axismove', (e) => {
         const x = e.detail.axis[2] !== undefined ? e.detail.axis[2] : e.detail.axis[0];
-        this.turnAxis = Math.abs(x) > this.deadZone ? x : 0;
+        const y = e.detail.axis[3] !== undefined ? e.detail.axis[3] : e.detail.axis[1];
+        this.turnAxis[0] = Math.abs(x) > this.deadZone ? x : 0;
+        this.turnAxis[1] = Math.abs(y) > this.deadZone ? y : 0;
         });
 
         this.camEl = cam;
     },
 
-    tick: function () {
-        // 1. Rotation fluide avec le stick droit
-        if (this.turnAxis !== 0) {
-        const rot = this.el.getAttribute('rotation');
-        rot.y -= this.turnAxis * this.turnSpeed;
-        this.el.setAttribute('rotation', rot);
-        }
+    tick: function (time, timeDelta) {
+      // Le stick droit tourne le rig horizontalement et incline la vue verticalement.
+      const delta = timeDelta / 1000;
+      if (this.turnAxis[0] !== 0) {
+      const rigRot = this.el.getAttribute('rotation');
+      rigRot.y -= this.turnAxis[0] * this.turnSpeed * delta;
+      this.el.setAttribute('rotation', rigRot);
+      }
+
+      if (this.turnAxis[1] !== 0) {
+      const pitchRot = this.cameraPitchEl.getAttribute('rotation');
+      pitchRot.x = THREE.MathUtils.clamp(
+        pitchRot.x + this.turnAxis[1] * this.pitchSpeed * delta,
+        -45,
+        45
+      );
+      this.cameraPitchEl.setAttribute('rotation', pitchRot);
+      }
 
         // 2. Déplacement relatif à l'orientation du casque
         if (this.moveAxes[0] !== 0 || this.moveAxes[1] !== 0) {
