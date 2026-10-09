@@ -32,7 +32,7 @@
     <div class="pill" id="statusMsg">Partie en cours</div>
   </div>
   <div class="hud bottom">
-    <div class="pill" id="actionMsg">Attrape la barre au sol (gâchette)</div>
+    <div class="pill" id="actionMsg">Attrape la barre au sol avec la main droite (gâchette)</div>
   </div>
 
   <a-scene renderer="antialias: true; colorManagement: true" vr-mode-ui="enabled: true">
@@ -57,7 +57,7 @@
     <!-- Les Quilles du Mölkky -->
     <a-entity id="pins"></a-entity>
 
-    <!-- Bâton de lancer (Mölkky) -->
+    <!-- Bâton de lancer (Mölkky) : long axe = axe Z local -->
     <a-box
       id="stick"
       molkky-stick
@@ -68,17 +68,6 @@
       position="0 0.05 -0.6"
       rotation="0 90 0">
     </a-box>
-
-    <!-- Marqueur de visée : point où le laser touche le sol -->
-    <a-ring
-      id="aimMarker"
-      radius-inner="0.12"
-      radius-outer="0.17"
-      rotation="-90 0 0"
-      position="0 0.02 0"
-      material="shader: flat; color: #ffd54a; opacity: 0.85"
-      visible="false">
-    </a-ring>
 
     <!-- Joueur (Camera Rig) -->
     <a-entity id="rig" position="0 0 0" vr-stick-movement>
@@ -93,19 +82,18 @@
         </a-camera>
       </a-entity>
 
+      <!-- Mains : décalées un peu vers l'avant pour entrer dans le champ de vision -->
       <a-entity id="HandsOffset" position="0 0 -0.3">
 
-        <!-- Manette gauche : Déplacement (Stick) + Laser -->
+        <!-- Manette gauche : Déplacement (Stick) -->
         <a-entity id="leftHand"
-                  laser-controls="hand: left"
                   oculus-touch-controls="hand: left"
                   windows-motion-controls="hand: left"
                   generic-tracked-controller-controls="hand: left">
         </a-entity>
 
-        <!-- Manette droite : Rotation (Stick) + Laser -->
+        <!-- Manette droite : Rotation (Stick) + barre de Mölkky -->
         <a-entity id="rightHand"
-                  laser-controls="hand: right"
                   oculus-touch-controls="hand: right"
                   windows-motion-controls="hand: right"
                   generic-tracked-controller-controls="hand: right">
@@ -124,7 +112,7 @@
       [-0.45, -2.05, 7], [-0.15, -2.00, 8], [0.15, -2.00, 9], [0.45, -2.05, 10],
       [-0.60, -2.25, 11], [0.60, -2.25, 12]
     ];
-    const HIT_R = 0.16;
+    const HIT_R = 0.09;   // distance max barre-quille pour la faire tomber (la barre compte sur toute sa longueur)
 
     let pins = [];
 
@@ -164,12 +152,13 @@
 
         this.camEl = cam;
 
+        // En VR, la hauteur vient du casque : on retire le décalage de 1 m
         const scene = this.el.sceneEl;
         scene.addEventListener('enter-vr', () => {
-          this.cameraPitchEl.setAttribute('position', { x:0, y: 0, z: 0});
+          this.cameraPitchEl.setAttribute('position', { x: 0, y: 0, z: 0 });
         });
         scene.addEventListener('exit-vr', () => {
-          this.cameraPitchEl.setAttribute('position', {x: 0, y: 1, z: 0});
+          this.cameraPitchEl.setAttribute('position', { x: 0, y: 1, z: 0 });
         });
       },
 
@@ -290,23 +279,24 @@
 
     // ===== Réglages du lancer =====
     const GRAVITY = 9.8;
-    const FRICTION = 1.1;          // plus grand = la barre s'arrête plus vite au sol
+    const FRICTION = 1.5;          // plus grand = la barre s'arrête plus vite au sol
+    const BOUNCE = 0.25;           // rebond au sol (0 = aucun)
     const STICK_Y = 0.05;          // hauteur de la barre posée au sol
-    const HOLD_OFFSET = new THREE.Vector3(0, 0, -0.12); // barre un peu devant la main
+    const BAR_HALF = 0.19;         // demi-longueur de la barre (m)
+    const HOLD_DIST = 0.1;         // la barre est tenue un peu devant la main (m)
+    const UP = new THREE.Vector3(0, 1, 0);
 
     // ===== Composant de la barre =====
     AFRAME.registerComponent('molkky-stick', {
       schema: {
-        grabDist: { default: 0.5 },       
-        returnDelay: { default: 3000 },   // attente 
-        minSpeed: { default: 4 },         
-        maxSpeed: { default: 12 },
-        boost: {default: 1.6},
-        lift: {default:0.3}         
+        grabDist: { default: 0.7 },       // distance horizontale pour l'attraper (m)
+        returnDelay: { default: 3000 },   // attente avant le retour (ms)
+        boost: { default: 1.4 },          // multiplicateur de puissance du geste
+        maxSpeed: { default: 12 }         // vitesse maxi du lancer (m/s)
       },
 
       init() {
-        
+        // États : ground -> holding -> flying -> waiting -> returning -> ready -> holding ...
         this.state = 'ground';
         this.hand = $('rightHand');
         this.vel = new THREE.Vector3();
@@ -315,145 +305,174 @@
         this.handVel = new THREE.Vector3();
         this.handQuat = new THREE.Quaternion();
         this.dir = new THREE.Vector3();
+        this.fwd = new THREE.Vector3(0, 0, -1);   // direction horizontale de la main
         this.tmp = new THREE.Vector3();
         this.p = new THREE.Vector3();
         this.from = new THREE.Vector3();
         this.fromQuat = new THREE.Quaternion();
+        this.toQuat = new THREE.Quaternion();
         this.hits = new Set();
+        this.history = [];                        // vitesses récentes de la main
+        this.yaw = Math.PI / 2;                   // orientation de la barre (rotation Y)
         this.timer = 0;
         this.flyTime = 0;
         this.returnT = 0;
-        this.landed = false;
-        this.history = [];
-        this.marker = $('aimMarker');
+        this.onGround = false;
 
-        $('actionMsg').textContent = 'Attrape la barre au sol (gâchette)';
+        $('actionMsg').textContent = 'Attrape la barre au sol avec la main droite (gâchette)';
 
-        ['leftHand', 'rightHand'].forEach(id => {
-          const h = $('rightHand');
-          h.addEventListener('triggerdown', () => this.onDown(h));
-          h.addEventListener('triggerup', () => this.onUp(h));
-          h.addEventListener('gripdown', () => this.onDown(h));
-          h.addEventListener('gripup', () => this.onUp(h));
-        });
+        // La barre se joue uniquement avec la main droite
+        const h = $('rightHand');
+        h.addEventListener('triggerdown', () => this.onDown(h));
+        h.addEventListener('triggerup', () => this.onUp(h));
+        h.addEventListener('gripdown', () => this.onDown(h));
+        h.addEventListener('gripup', () => this.onUp(h));
       },
 
-      // ----- 1. Attraper / viser -----
+      // ----- 1. Attraper / tenir la barre -----
       onDown(h) {
         this.history.length = 0;
         if (this.state === 'ground') {
           h.object3D.getWorldPosition(this.tmp);
           const s = this.el.object3D.position;
-          const d = Math.hypot(this.tmp.x - s.x, this.tmp.z - s.z);  // distance horizontale
+          const d = Math.hypot(this.tmp.x - s.x, this.tmp.z - s.z);   // distance horizontale
           if (d > this.data.grabDist) return;
           this.hand = h;
           this.readHand(0);
           this.handVel.set(0, 0, 0);
-          this.state = 'aiming';
-          $('actionMsg').textContent = 'Vise, puis relâche en lançant !';
+          this.state = 'holding';
+          $('actionMsg').textContent = 'Balance le bras et relâche la gâchette pour lancer !';
         } else if (this.state === 'ready' && h === this.hand) {
-          this.state = 'aiming';
-          $('actionMsg').textContent = 'Vise, puis relâche en lançant !';
+          this.state = 'holding';
+          $('actionMsg').textContent = 'Balance le bras et relâche la gâchette pour lancer !';
         }
       },
 
       onUp(h) {
-        if (this.state === 'aiming' && h === this.hand) this.throwStick();
+        if (this.state === 'holding' && h === this.hand) this.throwStick();
       },
 
+      // Lit la main : position, vitesse, et direction horizontale (pour garder la barre à plat)
       readHand(dt) {
         this.hand.object3D.getWorldPosition(this.handPos);
         this.hand.object3D.getWorldQuaternion(this.handQuat);
+
         if (dt > 0) {
           this.tmp.copy(this.handPos).sub(this.handPrev).divideScalar(dt);
-          this.handVel.lerp(this.tmp, 0.4);
-          this.history.push(this.handVel.length());
-          if(this.history.length > 10) this.history.shift();
+          this.handVel.lerp(this.tmp, 0.4);                 // lissage
+          this.history.push(this.handVel.clone());
+          if (this.history.length > 10) this.history.shift();
         }
         this.handPrev.copy(this.handPos);
+
+        // Barre horizontale, en travers de la direction où pointe la main
+        this.dir.set(0, 0, -1).applyQuaternion(this.handQuat);
+        const h = Math.hypot(this.dir.x, this.dir.z);
+        if (h > 0.2) {
+          this.fwd.set(this.dir.x / h, 0, this.dir.z / h);
+          this.yaw = Math.atan2(this.fwd.z, -this.fwd.x);
+        }
       },
 
       holdPos(out) {
-        return out.copy(HOLD_OFFSET).applyQuaternion(this.handQuat).add(this.handPos);
+        out.copy(this.handPos);
+        out.x += this.fwd.x * HOLD_DIST;
+        out.z += this.fwd.z * HOLD_DIST;
+        return out;
       },
 
       followHand() {
         const o = this.el.object3D;
         o.position.copy(this.holdPos(this.p));
-        o.quaternion.copy(this.handQuat);
+        o.quaternion.setFromAxisAngle(UP, this.yaw);        // toujours à plat
       },
 
-      updateMarker() {
-        this.dir.set(0, 0, -1).applyQuaternion(this.handQuat);
-        if (this.dir.y < -0.05) {
-          const t = -this.handPos.y / this.dir.y;
-          if (t < 20) {
-            this.marker.object3D.position.set(
-              this.handPos.x + this.dir.x * t, 0.02, this.handPos.z + this.dir.z * t
-            );
-            this.marker.object3D.visible = true;
-            return;
-          }
-        }
-        this.marker.object3D.visible = false;
-      },
-
-      // ----- Le lancé -----
+      // ----- 2. Lancer à la main -----
       throwStick() {
-        const peak = Math.max(0, ...this.history);                 // pic de vitesse du geste
-        const speed = THREE.MathUtils.clamp(
-        peak * this.data.boost, this.data.minSpeed, this.data.maxSpeed
-        );
-        this.dir.set(0, 0, -1).applyQuaternion(this.handQuat);     // direction = laser
-        this.dir.y += this.data.lift;                              // un peu d'arc
-        this.dir.normalize();
-        this.vel.copy(this.dir).multiplyScalar(speed);
+        // On prend l'échantillon le plus rapide des dernières images :
+        // la main ralentit au moment où on relâche la gâchette.
+        let best = null, bestLen = 0;
+        this.history.forEach(v => {
+          const l = v.length();
+          if (l > bestLen) { bestLen = l; best = v; }
+        });
+
+        this.vel.set(0, 0, 0);
+        if (best) this.vel.copy(best).multiplyScalar(this.data.boost);
+        const sp = this.vel.length();
+        if (sp > this.data.maxSpeed) this.vel.multiplyScalar(this.data.maxSpeed / sp);
+
+        // La barre reste horizontale, en travers de la direction du lancer
+        const hs = Math.hypot(this.vel.x, this.vel.z);
+        if (hs > 0.3) this.yaw = Math.atan2(this.vel.z, -this.vel.x);
+        this.el.object3D.quaternion.setFromAxisAngle(UP, this.yaw);
+
         this.hits.clear();
         this.flyTime = 0;
-        this.landed = false;
-        this.marker.object3D.visible = false;
+        this.onGround = false;
         this.state = 'flying';
         $('statusMsg').textContent = 'Partie en cours';
         $('actionMsg').textContent = 'Lancé !';
-},
+      },
 
-      fly(dt) {
+      // Une petite étape de simulation (appelée plusieurs fois par image)
+      step(h) {
         const o = this.el.object3D;
-        this.flyTime += dt;
 
-        this.vel.y -= GRAVITY * dt;
-        o.position.addScaledVector(this.vel, dt);
+        this.vel.y -= GRAVITY * h;
+        o.position.addScaledVector(this.vel, h);
 
-        // Contact avec le sol : la barre glisse
+        // Contact avec le sol
         if (o.position.y <= STICK_Y) {
           o.position.y = STICK_Y;
-          this.vel.y = 0;
-          if (!this.landed) {
-            this.landed = true;
-            o.rotation.set(0, Math.atan2(this.vel.x, this.vel.z), 0); // barre à plat dans le sens du mouvement
+          if (this.vel.y < -1) {
+            // rebond
+            this.vel.y *= -BOUNCE;
+            this.vel.x *= 0.8;
+            this.vel.z *= 0.8;
+            this.onGround = false;
+          } else {
+            // la barre glisse
+            this.vel.y = 0;
+            this.onGround = true;
+            const f = Math.exp(-FRICTION * h);
+            this.vel.x *= f;
+            this.vel.z *= f;
           }
-          const f = Math.exp(-FRICTION * dt);
-          this.vel.x *= f;
-          this.vel.z *= f;
+        } else {
+          this.onGround = false;
         }
 
-        // Collisions avec les quilles
+        // Collisions : la barre compte sur toute sa longueur
+        const ax = Math.sin(this.yaw), az = Math.cos(this.yaw);
         pins.forEach(p => {
           if (!p.standing || this.hits.has(p.num)) return;
           const pinH = 0.15 + p.num * 0.01;
-          const d = Math.hypot(o.position.x - p.x, o.position.z - p.z);
-          if (d < HIT_R && o.position.y < pinH + 0.05) {
+          if (o.position.y > pinH + 0.05) return;           // la barre passe au-dessus
+          const dx = p.x - o.position.x;
+          const dz = p.z - o.position.z;
+          const t = THREE.MathUtils.clamp(dx * ax + dz * az, -BAR_HALF, BAR_HALF);
+          const d = Math.hypot(dx - t * ax, dz - t * az);
+          if (d < HIT_R) {
             this.hits.add(p.num);
             knockPin(p);
             this.vel.x *= 0.75;
             this.vel.z *= 0.75;
           }
         });
+      },
+
+      fly(dt) {
+        const o = this.el.object3D;
+        this.flyTime += dt;
+
+        const steps = Math.max(1, Math.ceil(dt / 0.008));   // évite de traverser les quilles
+        for (let i = 0; i < steps; i++) this.step(dt / steps);
 
         // Fin du lancer
-        const slow = this.landed && Math.hypot(this.vel.x, this.vel.z) < 0.08;
+        const slow = this.onGround && Math.hypot(this.vel.x, this.vel.z) < 0.08;
         const out = Math.abs(o.position.x) > 15 || Math.abs(o.position.z) > 15;
-        if (slow || out || this.flyTime > 6) this.settle();
+        if (slow || out || this.flyTime > 8) this.settle();
       },
 
       settle() {
@@ -464,7 +483,7 @@
         $('actionMsg').textContent = 'La barre revient dans quelques secondes…';
       },
 
-      // ----- 3. Retour dans la main -----
+      // ----- 3. Retour automatique dans la main -----
       startReturn() {
         standAllPins();
         this.from.copy(this.el.object3D.position);
@@ -478,21 +497,22 @@
         this.returnT = Math.min(this.returnT + dt / 0.7, 1);       // 0,7 s de trajet
         const e = this.returnT * this.returnT * (3 - 2 * this.returnT);
         this.holdPos(this.p);
+        this.toQuat.setFromAxisAngle(UP, this.yaw);
         o.position.lerpVectors(this.from, this.p, e);
         o.position.y += Math.sin(Math.PI * e) * 0.3;                // petit arc
-        o.quaternion.copy(this.fromQuat).slerp(this.handQuat, e);
+        o.quaternion.copy(this.fromQuat).slerp(this.toQuat, e);
         if (this.returnT >= 1) {
           this.state = 'ready';
           $('statusMsg').textContent = 'Partie en cours';
-          $('actionMsg').textContent = 'Barre en main : gâchette pour viser';
+          $('actionMsg').textContent = 'Barre en main : maintiens la gâchette, puis relâche en lançant';
         }
       },
 
       tick(time, dtMs) {
         const dt = Math.min(dtMs / 1000, 0.05);
         switch (this.state) {
-          case 'aiming':
-            this.readHand(dt); this.followHand(); this.updateMarker(); break;
+          case 'holding':
+            this.readHand(dt); this.followHand(); break;
           case 'ready':
             this.readHand(dt); this.followHand(); break;
           case 'flying':
