@@ -212,7 +212,7 @@
 
     function finishThrow() {
       const n = stick.hits.size;
-      $('actionMsg').textContent = n > 0 ? `${n} quille${n > 1 ? 's' : ''} tombée${n > 1 ? 's' : ''} !` : 'Raté.';
+      $('statusMsg').textContent = n > 0 ? `${n} quille${n > 1 ? 's' : ''} tombée${n > 1 ? 's' : ''} !` : 'Raté.';
       setTimeout(() => {
         pins.forEach(p => { if (!p.standing) standPin(p); });
         resetStick();
