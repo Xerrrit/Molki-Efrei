@@ -29,7 +29,7 @@
 <body>
 
   <div class="hud top">
-    <div class="pill" id="statusMsg">ZQSD pour marcher • Souris pour tourner • Espace ou Clic pour lancer</div>
+    <div class="pill" id="statusMsg">Partie en cours</div>
   </div>
   <div class="hud bottom">
     <div class="pill" id="actionMsg">Face à la quille 1</div>
@@ -111,7 +111,6 @@
       if (k === 'q') wasd.keys.KeyA = true;
       if (k === 's') wasd.keys.KeyS = true;
       if (k === 'd') wasd.keys.KeyD = true;
-      if (e.code === 'Space') launchStick(0, -1.1);
     });
 
     window.addEventListener('keyup', e => {
@@ -221,12 +220,21 @@
       }, 900);
     }
 
-    // Clic souris ou gâchette VR pour lancer
-    window.addEventListener('pointerdown', e => {
-      if (e.target.closest('.hud')) return;
-      const screenAim = ((e.clientX / window.innerWidth) - 0.5) * 0.8;
-      launchStick(screenAim, -1.1);
-    });
+    // Lancer avec la gâchette des manettes VR
+    const leftController = $('leftHand');
+    const rightController = $('rightHand');
+
+    function handleVRTrigger() {
+    launchStick(0, -1.1);
+    }
+
+    // Événements gâchette A-Frame / WebXR
+    leftController.addEventListener('triggerdown', handleVRTrigger);
+    rightController.addEventListener('triggerdown', handleVRTrigger);
+
+    // Compatibilité supplémentaire pour le bouton de sélection WebXR
+    leftController.addEventListener('selectstart', handleVRTrigger);
+    rightController.addEventListener('selectstart', handleVRTrigger);
   </script>
 </body>
 </html>
