@@ -32,11 +32,11 @@
     <div class="pill" id="statusMsg">Partie en cours</div>
   </div>
   <div class="hud bottom">
-    <div class="pill" id="actionMsg">Face à la quille 1</div>
+    <div class="pill" id="actionMsg">Attrape la barre au sol (gâchette)</div>
   </div>
 
   <a-scene renderer="antialias: true; colorManagement: true" vr-mode-ui="enabled: true">
-    
+
     <!-- Ciel -->
     <a-sky color="#7ec0ee"></a-sky>
 
@@ -45,12 +45,12 @@
     <a-entity light="type: directional; color: #fff8eb; intensity: 1.1; position: 10 25 15; castShadow: true;"></a-entity>
 
     <!-- Énorme sol carré (120m x 120m) -->
-    <a-plane 
-      rotation="-90 0 0" 
-      width="120" 
-      height="120" 
-      color="#3c733f" 
-      roughness="0.95" 
+    <a-plane
+      rotation="-90 0 0"
+      width="120"
+      height="120"
+      color="#3c733f"
+      roughness="0.95"
       shadow="receive: true">
     </a-plane>
 
@@ -58,44 +58,56 @@
     <a-entity id="pins"></a-entity>
 
     <!-- Bâton de lancer (Mölkky) -->
-    <a-box 
-      id="stick" 
-      width="0.05" 
-      height="0.05" 
-      depth="0.38" 
-      color="#c98a4b" 
+    <a-box
+      id="stick"
+      molkky-stick
+      width="0.05"
+      height="0.05"
+      depth="0.38"
+      color="#c98a4b"
       position="0 0.05 -0.6"
       rotation="0 90 0">
     </a-box>
 
+    <!-- Marqueur de visée : point où le laser touche le sol -->
+    <a-ring
+      id="aimMarker"
+      radius-inner="0.12"
+      radius-outer="0.17"
+      rotation="-90 0 0"
+      position="0 0.02 0"
+      material="shader: flat; color: #ffd54a; opacity: 0.85"
+      visible="false">
+    </a-ring>
+
     <!-- Joueur (Camera Rig) -->
     <a-entity id="rig" position="0 0 0" vr-stick-movement>
-    <!-- Position de la caméra axe Y -->
-    <a-entity id="cameraPitch" position="0 1 0">
-      <a-camera 
-        id="camera" 
-        position="0 0 0" 
-        look-controls="pointerLockEnabled: false" 
-        wasd-controls="acceleration: 25">
-        <a-cursor fuse="false" color="#ffffff" opacity="0.5" raycaster="objects: .clickable"></a-cursor>
-      </a-camera>
-    </a-entity>
+      <!-- Position de la caméra axe Y -->
+      <a-entity id="cameraPitch" position="0 1 0">
+        <a-camera
+          id="camera"
+          position="0 0 0"
+          look-controls="pointerLockEnabled: false"
+          wasd-controls="acceleration: 25">
+          <a-cursor fuse="false" color="#ffffff" opacity="0.5" raycaster="objects: .clickable"></a-cursor>
+        </a-camera>
+      </a-entity>
 
-    <!-- Manette gauche : Déplacement (Stick) + Laser -->
-    <a-entity id="leftHand" 
-                laser-controls="hand: left" 
-                oculus-touch-controls="hand: left" 
+      <!-- Manette gauche : Déplacement (Stick) + Laser -->
+      <a-entity id="leftHand"
+                laser-controls="hand: left"
+                oculus-touch-controls="hand: left"
                 windows-motion-controls="hand: left"
                 generic-tracked-controller-controls="hand: left">
-    </a-entity>
+      </a-entity>
 
-    <!-- Manette droite : Rotation (Stick) + Laser -->
-    <a-entity id="rightHand" 
-                laser-controls="hand: right" 
-                oculus-touch-controls="hand: right" 
+      <!-- Manette droite : Rotation (Stick) + Laser -->
+      <a-entity id="rightHand"
+                laser-controls="hand: right"
+                oculus-touch-controls="hand: right"
                 windows-motion-controls="hand: right"
                 generic-tracked-controller-controls="hand: right">
-    </a-entity>
+      </a-entity>
     </a-entity>
 
   </a-scene>
@@ -110,20 +122,19 @@
       [-0.60, -2.25, 11], [0.60, -2.25, 12]
     ];
     const HIT_R = 0.16;
-    const STICK_START = { x: 0, y: 0.05, z: -0.6 };
 
     let pins = [];
-    let stick = { vx: 0, vz: 0, moving: false, hits: new Set() };
 
     const $ = id => document.getElementById(id);
 
+    // ===== Déplacement / rotation avec les sticks =====
     AFRAME.registerComponent('vr-stick-movement', {
-    init: function () {
+      init: function () {
         this.moveSpeed = 0.05;       // Vitesse de marche
-        this.turnSpeed = 90;         // Vitesse de rotation horizontale (degrés/seconde)
-        this.pitchSpeed = 70;        // Vitesse d'inclinaison verticale (degrés/seconde)
+        this.turnSpeed = 90;         // Rotation horizontale (degrés/seconde)
+        this.pitchSpeed = 70;        // Inclinaison verticale (degrés/seconde)
         this.deadZone = 0.15;        // Zone morte pour éviter le drift
-        
+
         this.moveAxes = [0, 0];      // [x, y] stick gauche
         this.turnAxis = [0, 0];      // [x, y] stick droit
 
@@ -132,71 +143,67 @@
         const cam = document.getElementById('camera');
         this.cameraPitchEl = document.getElementById('cameraPitch');
 
-        // Écoute du joystick gauche (Déplacement)
+        // Joystick gauche (Déplacement)
         leftHand.addEventListener('axismove', (e) => {
-        // Axes 2 et 3 correspondent aux sticks sur Meta Quest / WebXR
-        const x = e.detail.axis[2] !== undefined ? e.detail.axis[2] : e.detail.axis[0];
-        const y = e.detail.axis[3] !== undefined ? e.detail.axis[3] : e.detail.axis[1];
-        this.moveAxes[0] = Math.abs(x) > this.deadZone ? x : 0;
-        this.moveAxes[1] = Math.abs(y) > this.deadZone ? y : 0;
+          const x = e.detail.axis[2] !== undefined ? e.detail.axis[2] : e.detail.axis[0];
+          const y = e.detail.axis[3] !== undefined ? e.detail.axis[3] : e.detail.axis[1];
+          this.moveAxes[0] = Math.abs(x) > this.deadZone ? x : 0;
+          this.moveAxes[1] = Math.abs(y) > this.deadZone ? y : 0;
         });
 
-        // Écoute du joystick droit (Rotation)
+        // Joystick droit (Rotation)
         rightHand.addEventListener('axismove', (e) => {
-        const x = e.detail.axis[2] !== undefined ? e.detail.axis[2] : e.detail.axis[0];
-        const y = e.detail.axis[3] !== undefined ? e.detail.axis[3] : e.detail.axis[1];
-        this.turnAxis[0] = Math.abs(x) > this.deadZone ? x : 0;
-        this.turnAxis[1] = Math.abs(y) > this.deadZone ? y : 0;
+          const x = e.detail.axis[2] !== undefined ? e.detail.axis[2] : e.detail.axis[0];
+          const y = e.detail.axis[3] !== undefined ? e.detail.axis[3] : e.detail.axis[1];
+          this.turnAxis[0] = Math.abs(x) > this.deadZone ? x : 0;
+          this.turnAxis[1] = Math.abs(y) > this.deadZone ? y : 0;
         });
 
         this.camEl = cam;
-    },
+      },
 
-    tick: function (time, timeDelta) {
-      // Le stick droit tourne le rig horizontalement et incline la vue verticalement.
-      const delta = timeDelta / 1000;
-      if (this.turnAxis[0] !== 0) {
-      const rigRot = this.el.getAttribute('rotation');
-      rigRot.y -= this.turnAxis[0] * this.turnSpeed * delta;
-      this.el.setAttribute('rotation', rigRot);
-      }
+      tick: function (time, timeDelta) {
+        const delta = timeDelta / 1000;
 
-      if (this.turnAxis[1] !== 0) {
-      const pitchRot = this.cameraPitchEl.getAttribute('rotation');
-      pitchRot.x = THREE.MathUtils.clamp(
-        pitchRot.x + this.turnAxis[1] * this.pitchSpeed * delta,
-        -45,
-        45
-      );
-      this.cameraPitchEl.setAttribute('rotation', pitchRot);
-      }
-
-        // 2. Déplacement relatif à l'orientation du casque
-        if (this.moveAxes[0] !== 0 || this.moveAxes[1] !== 0) {
-        const rigPos = this.el.getAttribute('position');
-        
-        // Récupère l'orientation combinée (caméra + rig)
-        const camYRot = this.camEl.getAttribute('rotation').y;
-        const rigYRot = this.el.getAttribute('rotation').y;
-        const angleRad = THREE.MathUtils.degToRad(camYRot + rigYRot);
-
-        // Calcul des directions Forward et Right
-        const sin = Math.sin(angleRad);
-        const cos = Math.cos(angleRad);
-
-        const strafe = this.moveAxes[0] * this.moveSpeed;
-        const forward = this.moveAxes[1] * this.moveSpeed;
-
-        // Déplacement dans le plan horizontal X/Z
-        rigPos.x += strafe * cos + forward * sin;
-        rigPos.z += -strafe * sin + forward * cos;
-
-        this.el.setAttribute('position', rigPos);
+        if (this.turnAxis[0] !== 0) {
+          const rigRot = this.el.getAttribute('rotation');
+          rigRot.y -= this.turnAxis[0] * this.turnSpeed * delta;
+          this.el.setAttribute('rotation', rigRot);
         }
-    }
+
+        if (this.turnAxis[1] !== 0) {
+          const pitchRot = this.cameraPitchEl.getAttribute('rotation');
+          pitchRot.x = THREE.MathUtils.clamp(
+            pitchRot.x + this.turnAxis[1] * this.pitchSpeed * delta,
+            -45,
+            45
+          );
+          this.cameraPitchEl.setAttribute('rotation', pitchRot);
+        }
+
+        // Déplacement relatif à l'orientation du casque
+        if (this.moveAxes[0] !== 0 || this.moveAxes[1] !== 0) {
+          const rigPos = this.el.getAttribute('position');
+
+          const camYRot = this.camEl.getAttribute('rotation').y;
+          const rigYRot = this.el.getAttribute('rotation').y;
+          const angleRad = THREE.MathUtils.degToRad(camYRot + rigYRot);
+
+          const sin = Math.sin(angleRad);
+          const cos = Math.cos(angleRad);
+
+          const strafe = this.moveAxes[0] * this.moveSpeed;
+          const forward = this.moveAxes[1] * this.moveSpeed;
+
+          rigPos.x += strafe * cos + forward * sin;
+          rigPos.z += -strafe * sin + forward * cos;
+
+          this.el.setAttribute('position', rigPos);
+        }
+      }
     });
 
-    // Support complet clavier ZQSD (en plus de WASD natif)
+    // Support clavier ZQSD (en plus de WASD natif)
     window.addEventListener('keydown', e => {
       const wasd = $('camera').components['wasd-controls'];
       if (!wasd) return;
@@ -217,6 +224,7 @@
       if (k === 'd') wasd.keys.KeyD = false;
     });
 
+    // ===== Quilles =====
     function buildPins() {
       const wrap = $('pins');
       wrap.innerHTML = '';
@@ -249,51 +257,6 @@
       });
     }
 
-    buildPins();
-
-    function resetStick() {
-      stick.vx = 0; stick.vz = 0; stick.moving = false; stick.hits = new Set();
-      $('stick').setAttribute('position', { ...STICK_START });
-    }
-
-    function launchStick(aimX, powerZ) {
-      if (stick.moving) return;
-      stick.vx = aimX;
-      stick.vz = powerZ;
-      stick.moving = true;
-      stick.hits = new Set();
-      $('actionMsg').textContent = 'Lancé !';
-    }
-
-    // Déplacement et collisions
-    setInterval(() => {
-      if (!stick.moving) return;
-      const el = $('stick');
-      const pos = el.getAttribute('position');
-
-      pos.x += stick.vx * 0.05;
-      pos.z += stick.vz * 0.05;
-      stick.vx *= 0.94;
-      stick.vz *= 0.94;
-      el.setAttribute('position', pos);
-
-      pins.forEach(p => {
-        if (p.standing && !stick.hits.has(p.num)) {
-          const d = Math.hypot(pos.x - p.x, pos.z - p.z);
-          if (d < HIT_R) {
-            stick.hits.add(p.num);
-            knockPin(p);
-          }
-        }
-      });
-
-      const speed = Math.hypot(stick.vx, stick.vz);
-      if (speed < 0.02 || pos.z < -2.6 || Math.abs(pos.x) > 1.5) {
-        stick.moving = false;
-        finishThrow();
-      }
-    }, 16);
-
     function knockPin(p) {
       p.standing = false;
       p.el.setAttribute('animation', 'property: rotation; to: -75 0 25; dur: 220; easing: easeOutQuad');
@@ -304,31 +267,225 @@
       p.el.setAttribute('animation', 'property: rotation; to: 0 0 0; dur: 260; easing: easeOutQuad');
     }
 
-    function finishThrow() {
-      const n = stick.hits.size;
-      $('statusMsg').textContent = n > 0 ? `${n} quille${n > 1 ? 's' : ''} tombée${n > 1 ? 's' : ''} !` : 'Raté.';
-      setTimeout(() => {
-        pins.forEach(p => { if (!p.standing) standPin(p); });
-        resetStick();
-        setTimeout(() => $('actionMsg').textContent = "Face à la quille 1", 500);
-      }, 900);
+    function showResult(n) {
+      $('statusMsg').textContent = n > 0
+        ? `${n} quille${n > 1 ? 's' : ''} tombée${n > 1 ? 's' : ''} !`
+        : 'Raté.';
     }
 
-    // Lancer avec la gâchette des manettes VR
-    const leftController = $('leftHand');
-    const rightController = $('rightHand');
-
-    function handleVRTrigger() {
-    launchStick(0, -1.1);
+    function standAllPins() {
+      pins.forEach(p => { if (!p.standing) standPin(p); });
     }
 
-    // Événements gâchette A-Frame / WebXR
-    leftController.addEventListener('triggerdown', handleVRTrigger);
-    rightController.addEventListener('triggerdown', handleVRTrigger);
+    // ===== Réglages du lancer =====
+    const GRAVITY = 9.8;
+    const FRICTION = 1.8;          // plus grand = la barre s'arrête plus vite au sol
+    const STICK_Y = 0.05;          // hauteur de la barre posée au sol
+    const HOLD_OFFSET = new THREE.Vector3(0, 0, -0.12); // barre un peu devant la main
 
-    // Compatibilité supplémentaire pour le bouton de sélection WebXR
-    leftController.addEventListener('selectstart', handleVRTrigger);
-    rightController.addEventListener('selectstart', handleVRTrigger);
+    // ===== Composant de la barre =====
+    AFRAME.registerComponent('molkky-stick', {
+      schema: {
+        grabDist: { default: 0.4 },       
+        returnDelay: { default: 3000 },   // attente 
+        minSpeed: { default: 2 },         
+        maxSpeed: { default: 8 }          
+      },
+
+      init() {
+        
+        this.state = 'ground';
+        this.hand = $('rightHand');
+        this.vel = new THREE.Vector3();
+        this.handPos = new THREE.Vector3();
+        this.handPrev = new THREE.Vector3();
+        this.handVel = new THREE.Vector3();
+        this.handQuat = new THREE.Quaternion();
+        this.dir = new THREE.Vector3();
+        this.tmp = new THREE.Vector3();
+        this.p = new THREE.Vector3();
+        this.from = new THREE.Vector3();
+        this.fromQuat = new THREE.Quaternion();
+        this.hits = new Set();
+        this.timer = 0;
+        this.flyTime = 0;
+        this.returnT = 0;
+        this.landed = false;
+        this.marker = $('aimMarker');
+
+        $('actionMsg').textContent = 'Attrape la barre au sol (gâchette)';
+
+        ['leftHand', 'rightHand'].forEach(id => {
+          const h = $(id);
+          h.addEventListener('triggerdown', () => this.onDown(h));
+          h.addEventListener('triggerup', () => this.onUp(h));
+          h.addEventListener('gripdown', () => this.onDown(h));
+          h.addEventListener('gripup', () => this.onUp(h));
+        });
+      },
+
+      // ----- 1. Attraper / viser -----
+      onDown(h) {
+        if (this.state === 'ground') {
+          h.object3D.getWorldPosition(this.tmp);
+          if (this.tmp.distanceTo(this.el.object3D.position) > this.data.grabDist) return;
+          this.hand = h;
+          this.readHand(0);
+          this.handVel.set(0, 0, 0);
+          this.state = 'aiming';
+          $('actionMsg').textContent = 'Vise, puis relâche en lançant !';
+        } else if (this.state === 'ready' && h === this.hand) {
+          this.state = 'aiming';
+          $('actionMsg').textContent = 'Vise, puis relâche en lançant !';
+        }
+      },
+
+      onUp(h) {
+        if (this.state === 'aiming' && h === this.hand) this.throwStick();
+      },
+
+      readHand(dt) {
+        this.hand.object3D.getWorldPosition(this.handPos);
+        this.hand.object3D.getWorldQuaternion(this.handQuat);
+        if (dt > 0) {
+          this.tmp.copy(this.handPos).sub(this.handPrev).divideScalar(dt);
+          this.handVel.lerp(this.tmp, 0.4); // lissage de la vitesse de la main
+        }
+        this.handPrev.copy(this.handPos);
+      },
+
+      holdPos(out) {
+        return out.copy(HOLD_OFFSET).applyQuaternion(this.handQuat).add(this.handPos);
+      },
+
+      followHand() {
+        const o = this.el.object3D;
+        o.position.copy(this.holdPos(this.p));
+        o.quaternion.copy(this.handQuat);
+      },
+
+      updateMarker() {
+        this.dir.set(0, 0, -1).applyQuaternion(this.handQuat);
+        if (this.dir.y < -0.05) {
+          const t = -this.handPos.y / this.dir.y;
+          if (t < 20) {
+            this.marker.object3D.position.set(
+              this.handPos.x + this.dir.x * t, 0.02, this.handPos.z + this.dir.z * t
+            );
+            this.marker.object3D.visible = true;
+            return;
+          }
+        }
+        this.marker.object3D.visible = false;
+      },
+
+      // ----- 2. Lancer -----
+      throwStick() {
+        this.dir.set(0, 0, -1).applyQuaternion(this.handQuat);   // direction = laser
+        const speed = THREE.MathUtils.clamp(
+          this.handVel.length(), this.data.minSpeed, this.data.maxSpeed
+        );                                                        // puissance = geste
+        this.vel.copy(this.dir).multiplyScalar(speed);
+        this.hits.clear();
+        this.flyTime = 0;
+        this.landed = false;
+        this.marker.object3D.visible = false;
+        this.state = 'flying';
+        $('statusMsg').textContent = 'Partie en cours';
+        $('actionMsg').textContent = 'Lancé !';
+      },
+
+      fly(dt) {
+        const o = this.el.object3D;
+        this.flyTime += dt;
+
+        this.vel.y -= GRAVITY * dt;
+        o.position.addScaledVector(this.vel, dt);
+
+        // Contact avec le sol : la barre glisse
+        if (o.position.y <= STICK_Y) {
+          o.position.y = STICK_Y;
+          this.vel.y = 0;
+          if (!this.landed) {
+            this.landed = true;
+            o.rotation.set(0, Math.atan2(this.vel.x, this.vel.z), 0); // barre à plat dans le sens du mouvement
+          }
+          const f = Math.exp(-FRICTION * dt);
+          this.vel.x *= f;
+          this.vel.z *= f;
+        }
+
+        // Collisions avec les quilles
+        pins.forEach(p => {
+          if (!p.standing || this.hits.has(p.num)) return;
+          const pinH = 0.15 + p.num * 0.01;
+          const d = Math.hypot(o.position.x - p.x, o.position.z - p.z);
+          if (d < HIT_R && o.position.y < pinH + 0.05) {
+            this.hits.add(p.num);
+            knockPin(p);
+            this.vel.x *= 0.75;
+            this.vel.z *= 0.75;
+          }
+        });
+
+        // Fin du lancer
+        const slow = this.landed && Math.hypot(this.vel.x, this.vel.z) < 0.08;
+        const out = Math.abs(o.position.x) > 15 || Math.abs(o.position.z) > 15;
+        if (slow || out || this.flyTime > 6) this.settle();
+      },
+
+      settle() {
+        this.state = 'waiting';
+        this.timer = 0;
+        this.vel.set(0, 0, 0);
+        showResult(this.hits.size);
+        $('actionMsg').textContent = 'La barre revient dans quelques secondes…';
+      },
+
+      // ----- 3. Retour dans la main -----
+      startReturn() {
+        standAllPins();
+        this.from.copy(this.el.object3D.position);
+        this.fromQuat.copy(this.el.object3D.quaternion);
+        this.returnT = 0;
+        this.state = 'returning';
+      },
+
+      returnToHand(dt) {
+        const o = this.el.object3D;
+        this.returnT = Math.min(this.returnT + dt / 0.7, 1);       // 0,7 s de trajet
+        const e = this.returnT * this.returnT * (3 - 2 * this.returnT);
+        this.holdPos(this.p);
+        o.position.lerpVectors(this.from, this.p, e);
+        o.position.y += Math.sin(Math.PI * e) * 0.3;                // petit arc
+        o.quaternion.copy(this.fromQuat).slerp(this.handQuat, e);
+        if (this.returnT >= 1) {
+          this.state = 'ready';
+          $('statusMsg').textContent = 'Partie en cours';
+          $('actionMsg').textContent = 'Barre en main : gâchette pour viser';
+        }
+      },
+
+      tick(time, dtMs) {
+        const dt = Math.min(dtMs / 1000, 0.05);
+        switch (this.state) {
+          case 'aiming':
+            this.readHand(dt); this.followHand(); this.updateMarker(); break;
+          case 'ready':
+            this.readHand(dt); this.followHand(); break;
+          case 'flying':
+            this.fly(dt); break;
+          case 'waiting':
+            this.timer += dtMs;
+            if (this.timer >= this.data.returnDelay) this.startReturn();
+            break;
+          case 'returning':
+            this.readHand(dt); this.returnToHand(dt); break;
+        }
+      }
+    });
+
+    buildPins();
   </script>
 </body>
 </html>
