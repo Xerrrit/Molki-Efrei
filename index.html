@@ -3,14 +3,14 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-  <title>Mölkky AR avec Sol</title>
+  <title>Mölkky VR</title>
   <script src="https://cdn.jsdelivr.net/npm/aframe@1.5.0/dist/aframe-master.min.js"></script>
   <style>
-    :root { --panel: rgba(20, 16, 14, 0.88); --ink: #f4ecdf; }
+    :root { --panel: rgba(20, 16, 14, 0.85); --ink: #f4ecdf; }
     * { box-sizing: border-box; }
     html, body {
       margin: 0; padding: 0; width: 100%; height: 100%;
-      background: #111; color: var(--ink);
+      background: #000; color: var(--ink);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       overflow: hidden;
     }
@@ -22,86 +22,107 @@
     .bottom { bottom: 0; padding-bottom: calc(14px + env(safe-area-inset-bottom, 0)); }
     .pill {
       display: inline-block; background: var(--panel); border-radius: 20px;
-      padding: 8px 18px; font-size: 14px; border: 1px solid rgba(255,255,255,0.15);
+      padding: 8px 18px; font-size: 14px; border: 1px solid rgba(255,255,255,0.18);
     }
   </style>
 </head>
 <body>
 
   <div class="hud top">
-    <div class="pill" id="statusMsg">Partie prête</div>
+    <div class="pill" id="statusMsg">ZQSD pour marcher • Souris pour tourner • Espace ou Clic pour lancer</div>
   </div>
   <div class="hud bottom">
-    <div class="pill" id="actionMsg">Glisse vers le haut pour lancer</div>
+    <div class="pill" id="actionMsg">Face à la quille 1</div>
   </div>
 
-  <a-scene 
-    webxr="optionalFeatures: hit-test, local-floor;"
-    renderer="antialias: true; alpha: true"
-    vr-mode-ui="enabled: false">
+  <a-scene renderer="antialias: true; colorManagement: true" vr-mode-ui="enabled: true">
     
-    <!-- Éclairage réaliste avec ombres douces -->
-    <a-entity light="type: ambient; color: #ffffff; intensity: 0.85;"></a-entity>
-    <a-entity light="type: directional; color: #fff5e6; intensity: 0.9; position: 2 4 3;"></a-entity>
+    <!-- Ciel -->
+    <a-sky color="#7ec0ee"></a-sky>
 
-    <!-- Zone de jeu complète avec le sol -->
-    <a-entity id="gameRig" position="0 0 -0.5">
-      <!-- Sol / Pelouse sous les quilles -->
-      <a-circle 
-        rotation="-90 0 0" 
-        radius="1.6" 
-        color="#346838" 
-        roughness="0.9"
-        shadow="receive: true">
-      </a-circle>
+    <!-- Éclairage extérieur -->
+    <a-entity light="type: ambient; color: #b0c4de; intensity: 0.7;"></a-entity>
+    <a-entity light="type: directional; color: #fff8eb; intensity: 1.1; position: 10 25 15; castShadow: true;"></a-entity>
 
-      <!-- Cercle de délimitation visuelle -->
-      <a-ring 
-        rotation="-90 0 0" 
-        position="0 0.002 0"
-        radius-inner="1.58" 
-        radius-outer="1.62" 
-        color="#e5c18b" 
-        opacity="0.6">
-      </a-ring>
+    <!-- Énorme sol carré (120m x 120m) -->
+    <a-plane 
+      rotation="-90 0 0" 
+      width="120" 
+      height="120" 
+      color="#3c733f" 
+      roughness="0.95" 
+      shadow="receive: true">
+    </a-plane>
 
-      <!-- Quilles -->
-      <a-entity id="pins"></a-entity>
+    <!-- Les Quilles du Mölkky -->
+    <a-entity id="pins"></a-entity>
 
-      <!-- Bâton de lancer (Mölkky) -->
-      <a-box 
-        id="stick" 
-        width="0.05" 
-        height="0.05" 
-        depth="0.4" 
-        color="#c98a4b" 
-        position="0 0.05 1.1">
-      </a-box>
+    <!-- Bâton de lancer (Mölkky) -->
+    <a-box 
+      id="stick" 
+      width="0.05" 
+      height="0.05" 
+      depth="0.38" 
+      color="#c98a4b" 
+      position="0 0.05 -0.6"
+      rotation="0 90 0">
+    </a-box>
+
+    <!-- Joueur (Camera Rig) : spawn face à la quille 1 (z = 0, y = 1.6m) -->
+    <a-entity id="rig" position="0 0 0">
+      <a-camera 
+        id="camera" 
+        position="0 1.6 0" 
+        look-controls="pointerLockEnabled: false" 
+        wasd-controls="acceleration: 25">
+        <a-cursor fuse="false" color="#ffffff" opacity="0.5" raycaster="objects: .clickable"></a-cursor>
+      </a-camera>
+
+      <!-- Support manettes VR (Oculus Quest / Pico / Vive) -->
+      <a-entity id="leftHand" laser-controls="hand: left"></a-entity>
+      <a-entity id="rightHand" laser-controls="hand: right"></a-entity>
     </a-entity>
 
-    <!-- Caméra en plongée pour voir le sol et les quilles posées dessus -->
-    <a-entity id="cameraRig" position="0 1.1 1.6" rotation="-26 0 0">
-      <a-camera look-controls="enabled: false" wasd-controls="enabled: false"></a-camera>
-    </a-entity>
   </a-scene>
 
   <script>
+    // Configuration du jeu : la quille 1 est à l'avant (z = -1.5), orientée vers le joueur en z = 0
     const LAYOUT = [
-      [0, -0.90, 1], [-0.15, -0.75, 2], [0.15, -0.75, 3],
-      [-0.30, -0.55, 4], [0, -0.60, 5], [0.30, -0.55, 6],
-      [-0.45, -0.35, 7], [-0.15, -0.40, 8], [0.15, -0.40, 9],
-      [0.45, -0.35, 10], [-0.60, -0.15, 11], [0.60, -0.15, 12]
+      [0, -1.50, 1],
+      [-0.15, -1.65, 2], [0.15, -1.65, 3],
+      [-0.30, -1.85, 4], [0, -1.80, 5], [0.30, -1.85, 6],
+      [-0.45, -2.05, 7], [-0.15, -2.00, 8], [0.15, -2.00, 9], [0.45, -2.05, 10],
+      [-0.60, -2.25, 11], [0.60, -2.25, 12]
     ];
     const HIT_R = 0.16;
-    const STICK_START = { x: 0, y: 0.05, z: 1.1 };
+    const STICK_START = { x: 0, y: 0.05, z: -0.6 };
 
     let pins = [];
     let stick = { vx: 0, vz: 0, moving: false, hits: new Set() };
-    let grabbing = false;
-    let drag = null;
 
     const $ = id => document.getElementById(id);
-    const scene = document.querySelector('a-scene');
+
+    // Support complet clavier ZQSD (en plus de WASD natif)
+    window.addEventListener('keydown', e => {
+      const wasd = $('camera').components['wasd-controls'];
+      if (!wasd) return;
+      const k = e.key.toLowerCase();
+      if (k === 'z') wasd.keys.KeyW = true;
+      if (k === 'q') wasd.keys.KeyA = true;
+      if (k === 's') wasd.keys.KeyS = true;
+      if (k === 'd') wasd.keys.KeyD = true;
+      if (e.code === 'Space') launchStick(0, -1.1);
+    });
+
+    window.addEventListener('keyup', e => {
+      const wasd = $('camera').components['wasd-controls'];
+      if (!wasd) return;
+      const k = e.key.toLowerCase();
+      if (k === 'z') wasd.keys.KeyW = false;
+      if (k === 'q') wasd.keys.KeyA = false;
+      if (k === 's') wasd.keys.KeyS = false;
+      if (k === 'd') wasd.keys.KeyD = false;
+    });
 
     function buildPins() {
       const wrap = $('pins');
@@ -109,11 +130,10 @@
       pins = [];
 
       LAYOUT.forEach(([x, z, num]) => {
-        const h = 0.16 + (num * 0.012);
+        const h = 0.15 + (num * 0.01);
         const g = document.createElement('a-entity');
         g.setAttribute('position', `${x} 0 ${z}`);
 
-        // Cylindre de la quille (biseauté en haut)
         const body = document.createElement('a-cylinder');
         body.setAttribute('radius', 0.038);
         body.setAttribute('height', h);
@@ -121,13 +141,12 @@
         body.setAttribute('color', '#dfb887');
         body.setAttribute('roughness', '0.6');
 
-        // Numéro inscrit sur le dessus
         const label = document.createElement('a-text');
         label.setAttribute('value', num);
         label.setAttribute('align', 'center');
         label.setAttribute('color', '#2d1806');
-        label.setAttribute('width', 2.2);
-        label.setAttribute('position', `0 ${h + 0.02} 0`);
+        label.setAttribute('width', 2);
+        label.setAttribute('position', `0 ${h + 0.03} 0`);
         label.setAttribute('rotation', '-90 0 0');
 
         g.appendChild(body);
@@ -144,18 +163,16 @@
       $('stick').setAttribute('position', { ...STICK_START });
     }
 
-    function beginThrow(dx, dy) {
+    function launchStick(aimX, powerZ) {
       if (stick.moving) return;
-      const power = Math.min(Math.max(Math.hypot(dx, dy) / 60, 0.6), 1.9);
-      const aim = Math.max(-0.65, Math.min(0.65, -dx / 130));
-      stick.vx = aim * power;
-      stick.vz = -power;
+      stick.vx = aimX;
+      stick.vz = powerZ;
       stick.moving = true;
       stick.hits = new Set();
       $('actionMsg').textContent = 'Lancé !';
     }
 
-    // Physique du lancer
+    // Déplacement et collisions
     setInterval(() => {
       if (!stick.moving) return;
       const el = $('stick');
@@ -163,8 +180,8 @@
 
       pos.x += stick.vx * 0.05;
       pos.z += stick.vz * 0.05;
-      stick.vx *= 0.93;
-      stick.vz *= 0.93;
+      stick.vx *= 0.94;
+      stick.vz *= 0.94;
       el.setAttribute('position', pos);
 
       pins.forEach(p => {
@@ -178,7 +195,7 @@
       });
 
       const speed = Math.hypot(stick.vx, stick.vz);
-      if (speed < 0.02 || pos.z < -1.3 || Math.abs(pos.x) > 1.3) {
+      if (speed < 0.02 || pos.z < -2.6 || Math.abs(pos.x) > 1.5) {
         stick.moving = false;
         finishThrow();
       }
@@ -186,7 +203,7 @@
 
     function knockPin(p) {
       p.standing = false;
-      p.el.setAttribute('animation', 'property: rotation; to: 78 0 35; dur: 220; easing: easeOutQuad');
+      p.el.setAttribute('animation', 'property: rotation; to: -75 0 25; dur: 220; easing: easeOutQuad');
     }
 
     function standPin(p) {
@@ -196,41 +213,19 @@
 
     function finishThrow() {
       const n = stick.hits.size;
-      $('actionMsg').textContent = n > 0 ? `${n} quille${n > 1 ? 's' : ''} touchée${n > 1 ? 's' : ''} !` : 'Raté.';
+      $('actionMsg').textContent = n > 0 ? `${n} quille${n > 1 ? 's' : ''} tombée${n > 1 ? 's' : ''} !` : 'Raté.';
       setTimeout(() => {
         pins.forEach(p => { if (!p.standing) standPin(p); });
         resetStick();
-        setTimeout(() => $('actionMsg').textContent = "Glisse vers le haut pour lancer", 600);
+        setTimeout(() => $('actionMsg').textContent = "Face à la quille 1", 500);
       }, 900);
     }
 
-    function projectStick() {
-      const camEl = document.querySelector('a-camera');
-      if (!camEl || !camEl.components.camera) return null;
-      const el = $('stick');
-      const v = new THREE.Vector3();
-      el.object3D.getWorldPosition(v);
-      v.project(camEl.components.camera.camera);
-      return {
-        x: (v.x * 0.5 + 0.5) * window.innerWidth,
-        y: (-v.y * 0.5 + 0.5) * window.innerHeight
-      };
-    }
-
+    // Clic souris ou gâchette VR pour lancer
     window.addEventListener('pointerdown', e => {
-      if (stick.moving) return;
-      const sp = projectStick();
-      if (!sp) return;
-      if (Math.hypot(e.clientX - sp.x, e.clientY - sp.y) < 110) {
-        grabbing = true;
-        drag = { x: e.clientX, y: e.clientY };
-      }
-    });
-
-    window.addEventListener('pointerup', e => {
-      if (!grabbing) return;
-      grabbing = false;
-      beginThrow(e.clientX - drag.x, drag.y - e.clientY);
+      if (e.target.closest('.hud')) return;
+      const screenAim = ((e.clientX / window.innerWidth) - 0.5) * 0.8;
+      launchStick(screenAim, -1.1);
     });
   </script>
 </body>
