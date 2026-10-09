@@ -301,6 +301,7 @@
         returnDelay: { default: 3000 },   // attente 
         minSpeed: { default: 4 },         
         maxSpeed: { default: 12 },
+        boost: {default: 1.6},
         lift: {default:0.3}         
       },
 
@@ -329,7 +330,7 @@
         $('actionMsg').textContent = 'Attrape la barre au sol (gâchette)';
 
         ['leftHand', 'rightHand'].forEach(id => {
-          const h = $(rightHand);
+          const h = $('rightHand');
           h.addEventListener('triggerdown', () => this.onDown(h));
           h.addEventListener('triggerup', () => this.onUp(h));
           h.addEventListener('gripdown', () => this.onDown(h));
