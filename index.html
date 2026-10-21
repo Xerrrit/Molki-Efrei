@@ -82,21 +82,25 @@
         </a-camera>
       </a-entity>
 
-      <!-- Mains : décalées un peu vers l'avant pour entrer dans le champ de vision -->
+      <!-- Mains : décalées vers l'avant pour bien entrer dans le champ de vision -->
       <a-entity id="HandsOffset" position="0 0 -0.3">
 
-        <!-- Manette gauche : Déplacement (Stick) -->
+        <!-- Manette gauche : Déplacement (Stick).
+             Les modèles par défaut sont coupés : on dessine nos propres manettes (controller-model),
+             toujours visibles et sans téléchargement. -->
         <a-entity id="leftHand"
-                  oculus-touch-controls="hand: left"
-                  windows-motion-controls="hand: left"
-                  generic-tracked-controller-controls="hand: left">
+                  oculus-touch-controls="hand: left; model: false"
+                  windows-motion-controls="hand: left; model: false"
+                  generic-tracked-controller-controls="hand: left; defaultModel: false"
+                  controller-model="color: #2b2d33; accent: #4fa3ff">
         </a-entity>
 
         <!-- Manette droite : Rotation (Stick) + barre de Mölkky -->
         <a-entity id="rightHand"
-                  oculus-touch-controls="hand: right"
-                  windows-motion-controls="hand: right"
-                  generic-tracked-controller-controls="hand: right">
+                  oculus-touch-controls="hand: right; model: false"
+                  windows-motion-controls="hand: right; model: false"
+                  generic-tracked-controller-controls="hand: right; defaultModel: false"
+                  controller-model="color: #2b2d33; accent: #ffa040">
         </a-entity>
       </a-entity>
     </a-entity>
@@ -121,7 +125,7 @@
       const PIN_SEG = 14;              // facettes de la forme physique
       const STICK_R = 0.0295;
       const STICK_LEN = 0.225;
-      const STICK_MASS = 0.34;         // kg
+      const STICK_MASS = 1;         // kg
 
       // Centre de gravité de la quille biseautée, mesuré depuis le centre de la base.
       // Le biseau monte vers +x : le haut de la quille est en x = +r.
@@ -135,7 +139,7 @@
       const FALLEN_UP_Y = 0.5;         // quille tombée si inclinée de plus de 60°
 
       const world = new CANNON.World();
-      world.gravity.set(0, -9.82, 0);
+      world.gravity.set(0, -14, 0);
       world.broadphase = new CANNON.NaiveBroadphase();
       world.solver.iterations = 20;
       world.allowSleep = true;         // les objets immobiles "dorment" : pas de tremblement
@@ -166,7 +170,9 @@
 
       const UP = new CANNON.Vec3(0, 1, 0);
       const tmp = new CANNON.Vec3();
-      const BASE_LOCAL = new CANNON.Vec3(-PIN_COM_X, -PIN_COM_Y, 0);   // centre de la base, repère quille
+      // Repère quille (origine = centre de gravité) : centre de la base et centre de la face biseautée
+      const BASE_LOCAL = new CANNON.Vec3(-PIN_COM_X, -PIN_COM_Y, 0);            // centre de la base, repère quille
+      const TOP_LOCAL  = new CANNON.Vec3(-PIN_COM_X, PIN_HM - PIN_COM_Y, 0);    // centre de la face biseautée, repère quille
 
       // Forme physique de la quille : cylindre à sommet biseauté, centré sur son centre de gravité
       function makePinShape() {
@@ -287,6 +293,12 @@
         return { x: b.position.x + w.x, z: b.position.z + w.z };
       }
 
+      // Centre de la face biseautée (le haut de la quille), projeté au sol
+      function tipPos(b) {
+        const w = b.quaternion.vmult(TOP_LOCAL, tmp);
+        return { x: b.position.x + w.x, z: b.position.z + w.z };
+      }
+
       // Position / orientation d'une quille debout dont la base est en (x, z)
       function standingPose(x, z, yaw) {
         const quat = new CANNON.Quaternion();
@@ -305,12 +317,12 @@
         return true;
       }
 
-      // Calcule où relever les quilles tombées : à l'endroit de leur base,
+      // Calcule où relever les quilles tombées : à l'endroit de leur haut,
       // en les écartant juste assez si deux bases se chevauchent.
       function planRaise(pins) {
         const MIN_D = 2 * PIN_R + 0.004;
         const pts = pins.map(p => {
-          const s = basePos(p.body);
+          const s = p.fallen ? tipPos(p.body) : basePos(p.body);
           return { x: s.x, z: s.z, movable: p.fallen };
         });
         for (let it = 0; it < 30; it++) {
@@ -349,7 +361,7 @@
         PIN_R, PIN_H, PIN_CUT, PIN_HM, PIN_COM_X, PIN_COM_Y, PIN_FACE_YAW,
         STICK_R, STICK_LEN,
         makePin, makeStick, setStickHeld, keepAwake, step,
-        isFallen, basePos, standingPose, isStill, planRaise, placeStanding
+        isFallen, basePos, tipPos, standingPose, isStill, planRaise, placeStanding
       };
     })();
   </script>
@@ -381,6 +393,84 @@
     let pins = [];
 
     const $ = id => document.getElementById(id);
+
+    // ===== Manettes visibles =====
+    // Petit modèle de manette dessiné en 3D (poignée, tête, anneau, stick, gâchette)
+    // + un pointeur court vers l'avant qui montre où la barre sera tenue.
+    // Visible seulement quand la manette est réellement détectée.
+    AFRAME.registerComponent('controller-model', {
+      schema: {
+        color: { default: '#2b2d33' },
+        accent: { default: '#ffa040' }
+      },
+
+      init() {
+        const d = this.data;
+        const body = new THREE.MeshStandardMaterial({ color: d.color, roughness: 0.45, metalness: 0.1 });
+        this.accentMat = new THREE.MeshStandardMaterial({
+          color: d.accent, emissive: d.accent, emissiveIntensity: 0.25, roughness: 0.4
+        });
+        const g = new THREE.Group();
+
+        // Poignée : descend vers l'arrière, comme une vraie manette
+        const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.015, 0.105, 16), body);
+        grip.position.set(0, -0.045, 0.035);
+        grip.rotation.x = -0.5;
+        g.add(grip);
+
+        // Tête (là où se trouvent le stick et les boutons)
+        const head = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.024, 0.022, 24), body);
+        head.position.set(0, 0.004, -0.005);
+        g.add(head);
+
+        // Anneau de suivi, coloré : repère bien visible
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.042, 0.0055, 10, 40), this.accentMat);
+        ring.rotation.x = Math.PI / 2 - 0.35;
+        ring.position.set(0, 0.008, -0.02);
+        g.add(ring);
+
+        // Stick analogique
+        const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.012, 10), body);
+        stem.position.set(0, 0.021, -0.005);
+        g.add(stem);
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.005, 16), body);
+        cap.position.set(0, 0.028, -0.005);
+        g.add(cap);
+
+        // Gâchette
+        const trig = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.03, 0.012), this.accentMat);
+        trig.position.set(0, -0.018, -0.03);
+        trig.rotation.x = 0.4;
+        g.add(trig);
+
+        // Pointeur court vers l'avant (≈ point où la barre est tenue)
+        const beam = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.0015, 0.0015, 0.07, 6),
+          new THREE.MeshBasicMaterial({ color: d.accent, transparent: true, opacity: 0.6 })
+        );
+        beam.rotation.x = Math.PI / 2;
+        beam.position.set(0, 0, -0.06);
+        g.add(beam);
+        const tip = new THREE.Mesh(new THREE.SphereGeometry(0.007, 12, 8), this.accentMat);
+        tip.position.set(0, 0, -0.1);
+        g.add(tip);
+
+        g.visible = false;
+        this.group = g;
+        this.el.setObject3D('controller-model', g);
+        this.el.addEventListener('controllerconnected', () => { g.visible = true; });
+        this.el.addEventListener('controllerdisconnected', () => { g.visible = false; });
+      },
+
+      // Allume l'anneau (ex. : la barre est à portée)
+      setHighlight(on) {
+        this.accentMat.emissiveIntensity = on ? 1.3 : 0.25;
+      },
+
+      remove() {
+        this.el.removeObject3D('controller-model');
+      }
+    });
 
     // ===== Déplacement / rotation avec les sticks =====
     AFRAME.registerComponent('vr-stick-movement', {
@@ -489,9 +579,11 @@
     });
 
     // ===== Quilles (visuel + corps physique) =====
+    const WOOD_COLOR = '#dfb887';
 
     // Géométrie d'une quille officielle : cylindre à base plate, sommet coupé en biseau à 45°.
     // Centrée sur le centre de gravité, comme le corps physique.
+    // Groupes de matériaux du cylindre : 0 = côté, 1 = face du haut (biseau), 2 = base.
     function makePinGeometry() {
       const g = new THREE.CylinderGeometry(PHYS.PIN_R, PHYS.PIN_R, 1, 32, 1);
       const pos = g.attributes.position;
@@ -505,37 +597,70 @@
     }
     let PIN_GEOMETRY = null;
 
+    // Numéro peint sur la face biseautée, comme sur un vrai Mölkky.
+    // La texture est projetée à plat sur le biseau : on la comprime dans le sens de la pente
+    // pour que le chiffre ne paraisse pas étiré une fois posé sur la face inclinée.
+    // Orientation : le haut du chiffre pointe vers le côté haut de la quille,
+    // il se lit donc depuis la ligne de lancer.
+    function makeNumberTexture(num) {
+      const S = 256;
+      const c = document.createElement('canvas');
+      c.width = c.height = S;
+      const ctx = c.getContext('2d');
+
+      ctx.fillStyle = WOOD_COLOR;
+      ctx.fillRect(0, 0, S, S);
+
+      ctx.save();
+      ctx.translate(S / 2, S / 2);
+      ctx.scale(1, Math.cos(Math.atan(PHYS.PIN_CUT)));     // compensation du biseau (≈ 0,71 à 45°)
+
+      // Liseré gravé autour de la face
+      ctx.strokeStyle = 'rgba(70, 40, 15, 0.45)';
+      ctx.lineWidth = 8;
+      ctx.beginPath();
+      ctx.arc(0, 0, S * 0.44, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Chiffre
+      const txt = String(num);
+      let size = 170;
+      ctx.font = `900 ${size}px "Arial Black", Arial, sans-serif`;
+      const w = ctx.measureText(txt).width;
+      if (w > S * 0.62) {
+        size *= (S * 0.62) / w;
+        ctx.font = `900 ${size}px "Arial Black", Arial, sans-serif`;
+      }
+      ctx.fillStyle = '#2d1806';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(txt, 0, 6);
+
+      // 6 et 9 soulignés pour ne pas les confondre
+      if (num === 6 || num === 9) {
+        ctx.fillRect(-size * 0.28, size * 0.42, size * 0.56, size * 0.08);
+      }
+      ctx.restore();
+
+      const tex = new THREE.CanvasTexture(c);
+      if ('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace;
+      else tex.encoding = THREE.sRGBEncoding;
+      tex.anisotropy = 8;
+      return tex;
+    }
+
     function buildPins() {
       const wrap = $('pins');
       wrap.innerHTML = '';
       pins = [];
       if (!PIN_GEOMETRY) PIN_GEOMETRY = makePinGeometry();
-      const material = new THREE.MeshStandardMaterial({ color: '#dfb887', roughness: 0.6 });
-
-      // Centre de la face biseautée, et inclinaison de cette face
-      const faceAngle = Math.atan(PHYS.PIN_CUT);                 // 45°
-      const nx = -Math.sin(faceAngle), ny = Math.cos(faceAngle);  // normale de la face
-      const fx = -PHYS.PIN_COM_X + nx * 0.001;
-      const fy = PHYS.PIN_HM - PHYS.PIN_COM_Y + ny * 0.001;
+      const wood = new THREE.MeshStandardMaterial({ color: WOOD_COLOR, roughness: 0.6 });
 
       LAYOUT.forEach(([x, z, num]) => {
         // L'origine du groupe = le centre de gravité de la quille (comme le corps physique)
+        const top = new THREE.MeshStandardMaterial({ map: makeNumberTexture(num), roughness: 0.6 });
         const g = document.createElement('a-entity');
-        g.setObject3D('mesh', new THREE.Mesh(PIN_GEOMETRY, material));
-
-        // Le numéro est inscrit sur la face biseautée
-        const face = document.createElement('a-entity');
-        face.setAttribute('position', `${fx} ${fy} 0`);
-        face.setAttribute('rotation', `0 0 ${THREE.MathUtils.radToDeg(faceAngle)}`);
-        const label = document.createElement('a-text');
-        label.setAttribute('value', num);
-        label.setAttribute('align', 'center');
-        label.setAttribute('color', '#2d1806');
-        label.setAttribute('width', 1.4);
-        label.setAttribute('rotation', '-90 -90 0');             // à plat, lisible depuis le bas de la pente
-        face.appendChild(label);
-
-        g.appendChild(face);
+        g.setObject3D('mesh', new THREE.Mesh(PIN_GEOMETRY, [wood, top, wood]));
         wrap.appendChild(g);
 
         pins.push({ el: g, num, body: PHYS.makePin(x, z, PHYS.PIN_FACE_YAW), fallen: false });
@@ -618,6 +743,82 @@
         h.addEventListener('triggerup', () => this.onUp(h, 'trigger'));
         h.addEventListener('gripdown', () => this.onDown(h, 'grip'));
         h.addEventListener('gripup', () => this.onUp(h, 'grip'));
+
+        this.initGrabHelpers();
+      },
+
+      // ----- Aides visuelles pour attraper la barre -----
+      //  • un cercle au sol autour de la barre = zone où on peut l'attraper (vert quand la main y est)
+      //  • une petite ombre sous la main droite pour juger la distance au sol
+      //  • la barre et l'anneau de la manette s'illuminent quand elle est à portée (+ petite vibration)
+      initGrabHelpers() {
+        const scene = this.el.sceneEl.object3D;
+        const r = this.data.grabDist;
+
+        this.zoneMat = new THREE.MeshBasicMaterial({
+          color: '#ffffff', transparent: true, opacity: 0.4, depthWrite: false, side: THREE.DoubleSide
+        });
+        this.zone = new THREE.Mesh(new THREE.RingGeometry(r - 0.025, r, 64), this.zoneMat);
+        this.zone.rotation.x = -Math.PI / 2;
+        this.zone.visible = false;
+        scene.add(this.zone);
+
+        this.handDot = new THREE.Mesh(
+          new THREE.CircleGeometry(0.035, 24),
+          new THREE.MeshBasicMaterial({ color: '#ffa040', transparent: true, opacity: 0.55, depthWrite: false })
+        );
+        this.handDot.rotation.x = -Math.PI / 2;
+        this.handDot.visible = false;
+        scene.add(this.handDot);
+
+        this.inRange = false;
+        this.handConnected = false;
+        this.hand.addEventListener('controllerconnected', () => { this.handConnected = true; });
+        this.hand.addEventListener('controllerdisconnected', () => { this.handConnected = false; });
+      },
+
+      stickMaterial() {
+        const mesh = this.el.querySelector('a-cylinder')?.getObject3D('mesh');
+        return mesh ? mesh.material : null;
+      },
+
+      setInRange(on) {
+        if (on === this.inRange) return;
+        this.inRange = on;
+        this.zoneMat.color.set(on ? '#5dff7a' : '#ffffff');
+        this.zoneMat.opacity = on ? 0.75 : 0.4;
+        const m = this.stickMaterial();
+        if (m && m.emissive) m.emissive.set(on ? '#6a4310' : '#000000');
+        this.hand.components['controller-model']?.setHighlight(on);
+        if (on) {
+          // Petite vibration quand la main entre dans la zone
+          try {
+            const gp = this.hand.components['tracked-controls']?.controller?.gamepad;
+            gp?.hapticActuators?.[0]?.pulse?.(0.35, 35);
+          } catch (e) { /* pas de retour haptique : tant pis */ }
+        }
+      },
+
+      updateGrabHelpers() {
+        if (!this.handConnected) {
+          this.zone.visible = false;
+          this.handDot.visible = false;
+          this.setInRange(false);
+          return;
+        }
+        this.hand.object3D.getWorldPosition(this.tmp);
+        this.handDot.position.set(this.tmp.x, 0.004, this.tmp.z);
+        this.handDot.visible = true;
+
+        if (this.state === 'ground') {
+          const s = this.el.object3D.position;
+          this.zone.position.set(s.x, 0.003, s.z);
+          this.zone.visible = true;
+          this.setInRange(Math.hypot(this.tmp.x - s.x, this.tmp.z - s.z) <= this.data.grabDist);
+        } else {
+          this.zone.visible = false;
+          this.setInRange(false);
+        }
       },
 
       syncStickFromBody() {
@@ -791,7 +992,7 @@
         $('actionMsg').textContent = 'Les quilles se relèvent dans quelques secondes…';
       },
 
-      // ----- 3. Relever les quilles là où leur base est tombée -----
+      // ----- 3. Relever les quilles là où leur haut est tombé -----
       startRaise() {
         // La barre ne doit plus rien toucher pendant qu'on relève les quilles
         PHYS.setStickHeld(this.body, true);
@@ -800,7 +1001,7 @@
         this.raise = [];
         pins.forEach((p, i) => {
           if (!p.fallen) return;
-          // Relevée à l'endroit de sa base, numéro tourné vers les joueurs
+          // Relevée à l'endroit calculé, numéro tourné vers les joueurs
           const x = targets[i].x, z = targets[i].z, yaw = PHYS.PIN_FACE_YAW;
           const pose = PHYS.standingPose(x, z, yaw);
           const to = new THREE.Vector3(pose.pos.x, pose.pos.y, pose.pos.z);
@@ -878,6 +1079,7 @@
             break;
           case 'raising':
             this.raisePins(dt);
+            this.updateGrabHelpers();
             return;                                  // physique en pause pendant le relevage
           case 'returning':
             this.readHand(dt); this.returnToHand(dt); break;
@@ -889,6 +1091,7 @@
           this.syncStickFromBody();
         }
         if (this.state === 'flying') this.watchThrow(dt);
+        this.updateGrabHelpers();
       }
     });
   </script>
