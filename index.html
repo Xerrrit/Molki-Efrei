@@ -4,13 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <title>Mölkky VR</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;500;600;700;800;900&display=swap" rel="stylesheet">
   <script src="https://cdn.jsdelivr.net/npm/aframe@1.5.0/dist/aframe-master.min.js"></script>
+  <!-- Moteur physique (corps rigides, collisions, frottements, rebonds) -->
+  <script src="https://cdn.jsdelivr.net/npm/cannon@0.6.2/build/cannon.min.js"></script>
   <style>
-    :root { --panel: rgba(20, 16, 14, 0.85); --ink: #f4ecdf; }
+    :root { --panel: rgba(255, 250, 246, 0.88); --ink: #514653; }
     * { box-sizing: border-box; }
     html, body {
       margin: 0; padding: 0; width: 100%; height: 100%;
-      background: #000; color: var(--ink);
+      background: #f7f0f4; color: var(--ink);
       font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
       overflow: hidden;
     }
@@ -18,7 +23,7 @@
       position: fixed; left: 0; right: 0; z-index: 10;
       padding: 12px 16px; text-align: center; pointer-events: none;
     }
-    .top { top: 0; background: linear-gradient(rgba(0,0,0,0.65), transparent); }
+    .top { top: 0; background: linear-gradient(rgba(232, 220, 235, 0.72), transparent); }
     .bottom { bottom: 0; padding-bottom: calc(14px + env(safe-area-inset-bottom, 0)); }
     .pill {
       display: inline-block; background: var(--panel); border-radius: 20px;
@@ -28,15 +33,19 @@
 </head>
 <body>
 
+  <!-- HUD écran (ordinateur). En VR, tout est affiché dans la scène : tableau + poignet gauche -->
   <div class="hud top">
-    <div class="pill" id="statusMsg">Partie en cours</div>
+    <div class="pill" id="statusMsg">Menu principal</div>
   </div>
   <div class="hud bottom">
-    <div class="pill" id="actionMsg">Face à la quille 1</div>
+    <div class="pill" id="actionMsg">Choisis une difficulté puis appuie sur Jouer</div>
   </div>
 
-  <a-scene renderer="antialias: true; colorManagement: true" vr-mode-ui="enabled: true">
-    
+  <!-- cursor/raycaster de la scène : clic souris sur les menus (ordinateur) -->
+  <a-scene renderer="antialias: true; colorManagement: true" vr-mode-ui="enabled: true"
+           cursor="rayOrigin: mouse; fuse: false"
+           raycaster="objects: .clickable; far: 30">
+
     <!-- Ciel -->
     <a-sky color="#7ec0ee"></a-sky>
 
@@ -45,158 +54,1045 @@
     <a-entity light="type: directional; color: #fff8eb; intensity: 1.1; position: 10 25 15; castShadow: true;"></a-entity>
 
     <!-- Énorme sol carré (120m x 120m) -->
-    <a-plane 
-      rotation="-90 0 0" 
-      width="120" 
-      height="120" 
-      color="#3c733f" 
-      roughness="0.95" 
+    <a-plane
+      rotation="-90 0 0"
+      width="120"
+      height="120"
+      color="#3c733f"
+      roughness="0.95"
       shadow="receive: true">
     </a-plane>
+
+    <!-- Ligne de lancer (mölkkaari) -->
+    <a-box position="0 0.005 -0.35" width="0.9" height="0.01" depth="0.04" color="#f2efe6"></a-box>
 
     <!-- Les Quilles du Mölkky -->
     <a-entity id="pins"></a-entity>
 
-    <!-- Bâton de lancer (Mölkky) -->
-    <a-box 
-      id="stick" 
-      width="0.05" 
-      height="0.05" 
-      depth="0.38" 
-      color="#c98a4b" 
-      position="0 0.05 -0.6"
-      rotation="0 90 0">
-    </a-box>
+    <!-- Bâton de lancer (Mölkky) : long axe = axe Z local -->
+    <a-entity id="stick" molkky-stick>
+      <!-- cylindre de 22,5 cm × Ø 5,9 cm, couché dans l'axe Z -->
+      <a-cylinder radius="0.0295" height="0.225" segments-radial="24"
+                  rotation="90 0 0" color="#c98a4b" roughness="0.6"></a-cylinder>
+    </a-entity>
 
     <!-- Joueur (Camera Rig) -->
     <a-entity id="rig" position="0 0 0" vr-stick-movement>
-    <!-- Position de la caméra axe Y -->
-    <a-entity id="cameraPitch" position="0 1 0">
-      <a-camera 
-        id="camera" 
-        position="0 0 0" 
-        look-controls="pointerLockEnabled: false" 
-        wasd-controls="acceleration: 25">
-        <a-cursor fuse="false" color="#ffffff" opacity="0.5" raycaster="objects: .clickable"></a-cursor>
-      </a-camera>
+      <!-- Position de la caméra axe Y -->
+      <a-entity id="cameraPitch" position="0 1 0">
+        <a-camera
+          id="camera"
+          position="0 0 0"
+          look-controls="pointerLockEnabled: false"
+          wasd-controls="acceleration: 25">
+        </a-camera>
+      </a-entity>
+
+      <!-- Mains : décalées vers l'avant pour bien entrer dans le champ de vision -->
+      <a-entity id="HandsOffset" position="0 0 -0.3">
+
+        <!-- Manette gauche : Déplacement (Stick) + panneau de score au poignet + bouton Y = pause -->
+        <a-entity id="leftHand"
+                  oculus-touch-controls="hand: left; model: false"
+                  windows-motion-controls="hand: left; model: false"
+                  generic-tracked-controller-controls="hand: left; defaultModel: false"
+                  controller-model="color: #514653; accent: #b9a0d8">
+        </a-entity>
+
+        <!-- Manette droite : Rotation (Stick) + barre de Mölkky + rayon laser dans les menus -->
+        <a-entity id="rightHand"
+                  oculus-touch-controls="hand: right; model: false"
+                  windows-motion-controls="hand: right; model: false"
+                  generic-tracked-controller-controls="hand: right; defaultModel: false"
+                  controller-model="color: #514653; accent: #d9b5c5"
+                  raycaster="objects: .clickable; far: 5; enabled: false; showLine: false; lineColor: #d9b5c5; lineOpacity: 0.9"
+                  cursor="rayOrigin: entity; fuse: false; downEvents: triggerdown; upEvents: triggerup">
+        </a-entity>
+      </a-entity>
     </a-entity>
 
-    <!-- Manette gauche : Déplacement (Stick) + Laser -->
-    <a-entity id="leftHand" 
-                laser-controls="hand: left" 
-                oculus-touch-controls="hand: left" 
-                windows-motion-controls="hand: left"
-                generic-tracked-controller-controls="hand: left">
-    </a-entity>
-
-    <!-- Manette droite : Rotation (Stick) + Laser -->
-    <a-entity id="rightHand" 
-                laser-controls="hand: right" 
-                oculus-touch-controls="hand: right" 
-                windows-motion-controls="hand: right"
-                generic-tracked-controller-controls="hand: right">
-    </a-entity>
-    </a-entity>
+    <!-- Règles, score, menus, tableau d'affichage -->
+    <a-entity id="game" game-manager></a-entity>
 
   </a-scene>
 
+  <!-- ===== Monde physique (indépendant d'A-Frame) ===== -->
+  <script id="physics-core">
+    const PHYS = (function () {
+      // Groupes de collision
+      const G_GROUND = 1, G_PIN = 2, G_STICK = 4;
+
+      // Dimensions officielles du Mölkky (bouleau)
+      //   quilles : 15 cm de haut, Ø 5,9 cm, base plate, sommet biseauté à 45°
+      //   bâton   : 22,5 cm de long, Ø 5,9 cm
+      // (quilles agrandies par rapport à l'officiel : Ø 7,4 cm, 20 cm de haut)
+      const PIN_R = 0.037;
+      const PIN_H = 0.20;              // hauteur du côté le plus haut
+      const PIN_CUT = Math.tan(45 * Math.PI / 180);   // pente du biseau
+      const PIN_HM = PIN_H - PIN_R * PIN_CUT;         // hauteur au centre du biseau
+      const PIN_MASS = 0.15;           // kg
+      const PIN_SEG = 14;              // facettes de la forme physique
+      const STICK_R = 0.0295;
+      const STICK_LEN = 0.225;
+      const STICK_MASS = 1;         // kg
+      const GRAVITY = 14;
+
+      // Centre de gravité de la quille biseautée, mesuré depuis le centre de la base.
+      // Le biseau monte vers +x : le haut de la quille est en x = +r.
+      const PIN_COM_Y = (PIN_HM * PIN_HM + PIN_CUT * PIN_CUT * PIN_R * PIN_R / 4) / (2 * PIN_HM);
+      const PIN_COM_X = PIN_CUT * PIN_R * PIN_R / (4 * PIN_HM);
+      // Orientation de départ : la face biseautée (et son numéro) regarde les joueurs (+z)
+      const PIN_FACE_YAW = Math.PI / 2;
+
+      const FIXED_STEP = 1 / 300;      // petit pas fixe : pas de barre qui traverse une quille
+      const MAX_SUBSTEPS = 20;
+      const FALLEN_UP_Y = 0.5;         // quille tombée si inclinée de plus de 60°
+
+      const world = new CANNON.World();
+      world.gravity.set(0, -GRAVITY, 0);
+      world.broadphase = new CANNON.NaiveBroadphase();
+      world.solver.iterations = 20;
+      world.allowSleep = true;         // les objets immobiles "dorment" : pas de tremblement
+
+      // Matériaux : quilles, bâton, herbe
+      const WOOD_FRICTION = 0.35;          // bois contre bois
+      const WOOD_RESTITUTION = 0.5;        // bouleau dur : le choc "claque" et transmet bien l'énergie
+      const PIN_GRASS_FRICTION = 0.6;      // adhérence de la base des quilles dans l'herbe
+      const STICK_GRASS_FRICTION = 0.45;   // frottement du bâton qui glisse dans l'herbe
+      const pinWood = new CANNON.Material('quille');
+      const stickWood = new CANNON.Material('baton');
+      const grass = new CANNON.Material('herbe');
+      const cm = (a, b, friction, restitution) => world.addContactMaterial(new CANNON.ContactMaterial(a, b, {
+        friction, restitution, contactEquationStiffness: 1e7, contactEquationRelaxation: 3
+      }));
+      cm(pinWood, pinWood, WOOD_FRICTION, WOOD_RESTITUTION);
+      cm(pinWood, stickWood, WOOD_FRICTION, WOOD_RESTITUTION);
+      cm(pinWood, grass, PIN_GRASS_FRICTION, 0.12);
+      cm(stickWood, grass, STICK_GRASS_FRICTION, 0.12);
+
+      // Sol
+      const ground = new CANNON.Body({ mass: 0, material: grass });
+      ground.addShape(new CANNON.Plane());
+      ground.quaternion.setFromAxisAngle(new CANNON.Vec3(1, 0, 0), -Math.PI / 2);
+      ground.collisionFilterGroup = G_GROUND;
+      ground.collisionFilterMask = G_PIN | G_STICK;
+      world.addBody(ground);
+
+      const UP = new CANNON.Vec3(0, 1, 0);
+      const tmp = new CANNON.Vec3();
+      // Repère quille (origine = centre de gravité) : centre de la base et centre de la face biseautée
+      const BASE_LOCAL = new CANNON.Vec3(-PIN_COM_X, -PIN_COM_Y, 0);
+      const TOP_LOCAL  = new CANNON.Vec3(-PIN_COM_X, PIN_HM - PIN_COM_Y, 0);
+
+      // Forme physique de la quille : cylindre à sommet biseauté, centré sur son centre de gravité
+      function makePinShape() {
+        const v = [];
+        for (let i = 0; i < PIN_SEG; i++) {                 // anneau du bas
+          const a = 2 * Math.PI * i / PIN_SEG;
+          v.push(new CANNON.Vec3(PIN_R * Math.cos(a) - PIN_COM_X, -PIN_COM_Y, PIN_R * Math.sin(a)));
+        }
+        for (let i = 0; i < PIN_SEG; i++) {                 // anneau du haut, en pente
+          const a = 2 * Math.PI * i / PIN_SEG;
+          const x = PIN_R * Math.cos(a);
+          v.push(new CANNON.Vec3(x - PIN_COM_X, PIN_HM + PIN_CUT * x - PIN_COM_Y, PIN_R * Math.sin(a)));
+        }
+        const f = [];
+        const bottom = [], top = [];
+        for (let i = 0; i < PIN_SEG; i++) {
+          const j = (i + 1) % PIN_SEG;
+          f.push([i, PIN_SEG + i, PIN_SEG + j, j]);         // côtés
+          bottom.push(i);
+          top.unshift(PIN_SEG + i);
+        }
+        f.push(bottom, top);
+        return new CANNON.ConvexPolyhedron(v, f);
+      }
+      const PIN_SHAPE = makePinShape();
+
+      function tune(b, linDamp, angDamp) {
+        b.linearDamping = linDamp;
+        b.angularDamping = angDamp;
+        b.allowSleep = true;
+        b.sleepSpeedLimit = 0.05;
+        b.sleepTimeLimit = 0.4;
+      }
+
+      const pinBodies = [], stickBodies = [];
+
+      function makePin(x, z, yaw) {
+        const b = new CANNON.Body({ mass: PIN_MASS, material: pinWood });
+        b.addShape(PIN_SHAPE);
+        b.collisionFilterGroup = G_PIN;
+        b.collisionFilterMask = G_GROUND | G_PIN | G_STICK;
+        tune(b, 0.05, 0.35);
+        placeStanding(b, x, z, yaw);
+        world.addBody(b);
+        pinBodies.push(b);
+        b.sleep();
+        return b;
+      }
+
+      // Retire toutes les quilles du monde physique (nouvelle partie / changement de distance)
+      function clearPins() {
+        for (const b of pinBodies) world.removeBody(b);
+        pinBodies.length = 0;
+      }
+
+      // Bâton : vrai cylindre (le cylindre de cannon est déjà dans l'axe Z, comme le bâton)
+      function makeStick(x, z, yaw) {
+        const b = new CANNON.Body({ mass: STICK_MASS, material: stickWood });
+        b.addShape(new CANNON.Cylinder(STICK_R, STICK_R, STICK_LEN, 16));
+        b.collisionFilterGroup = G_STICK;
+        tune(b, 0.01, 0.2);
+        b.position.set(x, STICK_R, z);
+        b.quaternion.setFromAxisAngle(UP, yaw);
+        world.addBody(b);
+        stickBodies.push(b);
+        setStickHeld(b, false);
+        b.sleep();
+        return b;
+      }
+
+      // Barre tenue en main : elle suit la main et ne touche rien.
+      // Barre lâchée : objet physique normal.
+      function setStickHeld(b, held) {
+        b.velocity.set(0, 0, 0);
+        b.angularVelocity.set(0, 0, 0);
+        if (held) {
+          b.type = CANNON.Body.KINEMATIC;
+          b.collisionFilterMask = 0;
+        } else {
+          b.type = CANNON.Body.DYNAMIC;
+          b.collisionFilterMask = G_GROUND | G_PIN;
+          b.wakeUp();
+        }
+      }
+
+      // Pendant un lancer, les quilles doivent rester éveillées : une quille "endormie"
+      // se comporte comme un mur au moment du choc et le bâton rebondit dessus.
+      function keepAwake(bodies, on) {
+        bodies.forEach(b => {
+          b.allowSleep = !on;
+          if (on) b.wakeUp();
+        });
+      }
+
+      function step(dt) {
+        for (const b of pinBodies) {
+          const lying = upVector(b).y < 0.3;
+          b.angularDamping = lying ? 0.85 : 0.35;
+          b.linearDamping = lying ? 0.3 : 0.05;
+        }
+        for (const b of stickBodies) {
+          const onGround = b.position.y < STICK_R + 0.01;
+          const slow = b.velocity.norm() < 0.8;
+          b.angularDamping = onGround && slow ? 0.9 : 0.2;
+          b.linearDamping = onGround && slow ? 0.6 : 0.01;
+        }
+        world.step(FIXED_STEP, dt, MAX_SUBSTEPS);
+      }
+
+      function upVector(b) {
+        return b.quaternion.vmult(UP, tmp);
+      }
+
+      function isFallen(b) {
+        return upVector(b).y < FALLEN_UP_Y;
+      }
+
+      // Quille pas tombée mais pas droite non plus : penchée (appuyée sur une autre quille)
+      // ou posée en hauteur sur une quille couchée. Elle sera redressée à sa place.
+      const LEAN_UP_Y = 0.98;          // plus de ~11° d'inclinaison
+      const _bw = new CANNON.Vec3();
+      function isLeaning(b) {
+        if (isFallen(b)) return false;
+        const baseY = b.position.y + b.quaternion.vmult(BASE_LOCAL, _bw).y;
+        return upVector(b).y < LEAN_UP_Y || baseY > 0.01;
+      }
+
+      function basePos(b) {
+        const w = b.quaternion.vmult(BASE_LOCAL, tmp);
+        return { x: b.position.x + w.x, z: b.position.z + w.z };
+      }
+
+      function tipPos(b) {
+        const w = b.quaternion.vmult(TOP_LOCAL, tmp);
+        return { x: b.position.x + w.x, z: b.position.z + w.z };
+      }
+
+      function standingPose(x, z, yaw) {
+        const quat = new CANNON.Quaternion();
+        quat.setFromAxisAngle(UP, yaw);
+        const off = quat.vmult(BASE_LOCAL);
+        const pos = new CANNON.Vec3(x - off.x, -off.y, z - off.z);
+        return { pos, quat };
+      }
+
+      function isStill(bodies) {
+        for (const b of bodies) {
+          if (b.type !== CANNON.Body.DYNAMIC || b.sleepState === CANNON.Body.SLEEPING) continue;
+          if (b.velocity.norm() > 0.04 || b.angularVelocity.norm() > 0.4) return false;
+        }
+        return true;
+      }
+
+      // Calcule où relever les quilles tombées : à l'endroit de leur haut,
+      // en les écartant juste assez si deux bases se chevauchent.
+      function planRaise(pins) {
+        const MIN_D = 2 * PIN_R + 0.004;
+        const pts = pins.map(p => {
+          const s = p.fallen ? tipPos(p.body) : basePos(p.body);
+          return { x: s.x, z: s.z, movable: p.fallen || p.leaning };
+        });
+        for (let it = 0; it < 30; it++) {
+          let moved = false;
+          for (let i = 0; i < pts.length; i++) {
+            for (let j = i + 1; j < pts.length; j++) {
+              const a = pts[i], c = pts[j];
+              if (!a.movable && !c.movable) continue;
+              let dx = c.x - a.x, dz = c.z - a.z;
+              let d = Math.hypot(dx, dz);
+              if (d >= MIN_D) continue;
+              if (d < 1e-6) { dx = Math.random() - 0.5; dz = Math.random() - 0.5; d = Math.hypot(dx, dz); }
+              const push = (MIN_D - d) / d;
+              const share = a.movable && c.movable ? 0.5 : 1;
+              if (a.movable) { a.x -= dx * push * share; a.z -= dz * push * share; }
+              if (c.movable) { c.x += dx * push * share; c.z += dz * push * share; }
+              moved = true;
+            }
+          }
+          if (!moved) break;
+        }
+        return pts;
+      }
+
+      function placeStanding(b, x, z, yaw) {
+        const s = standingPose(x, z, yaw);
+        b.position.copy(s.pos);
+        b.quaternion.copy(s.quat);
+        b.velocity.set(0, 0, 0);
+        b.angularVelocity.set(0, 0, 0);
+      }
+
+      return {
+        world, GRAVITY,
+        PIN_R, PIN_H, PIN_CUT, PIN_HM, PIN_COM_X, PIN_COM_Y, PIN_FACE_YAW,
+        STICK_R, STICK_LEN,
+        makePin, clearPins, makeStick, setStickHeld, keepAwake, step,
+        isFallen, isLeaning, basePos, tipPos, standingPose, isStill, planRaise, placeStanding
+      };
+    })();
+  </script>
+
   <script>
-    // Configuration du jeu : la quille 1 est à l'avant (z = -1.5), orientée vers le joueur en z = 0
-    const LAYOUT = [
-      [0, -1.50, 1],
-      [-0.15, -1.65, 2], [0.15, -1.65, 3],
-      [-0.30, -1.85, 4], [0, -1.80, 5], [0.30, -1.85, 6],
-      [-0.45, -2.05, 7], [-0.15, -2.00, 8], [0.15, -2.00, 9], [0.45, -2.05, 10],
-      [-0.60, -2.25, 11], [0.60, -2.25, 12]
-    ];
-    const HIT_R = 0.16;
-    const STICK_START = { x: 0, y: 0.05, z: -0.6 };
-
-    let pins = [];
-    let stick = { vx: 0, vz: 0, moving: false, hits: new Set() };
-
     const $ = id => document.getElementById(id);
 
+    // ===== Niveaux de difficulté =====
+    //  distance   : distance entre le joueur et la première rangée de quilles (m)
+    //  helpers    : zone d'attrape au sol, ombre de la main, barre qui s'illumine
+    //  trajectory : trajectoire prévue affichée pendant qu'on tient la barre
+    const DIFFICULTIES = {
+      easy: {
+        label: 'Facile', distance: 2.5, helpers: true, trajectory: true,
+        desc: 'Quilles à 2,5 m. Zone d’attrape et trajectoire prévue du lancer affichées.'
+      },
+      normal: {
+        label: 'Normal', distance: 3.5, helpers: true, trajectory: false,
+        desc: 'Quilles à 3,5 m (réglage standard). Zone d’attrape affichée.'
+      },
+      hard: {
+        label: 'Difficile', distance: 4.5, helpers: false, trajectory: false,
+        desc: 'Quilles à 4,5 m. Aucune assistance visuelle.'
+      }
+    };
+    const DIFF_ORDER = ['easy', 'normal', 'hard'];
+
+    // ===== Règles du score =====
+    const TARGET = 50;        // il faut atteindre exactement 50
+    const RESET_TO = 25;      // au-delà de 50 : retour à 25
+    const MAX_MISSES = 3;     // 3 lancers sans point de suite : perdu
+
+    // 1 quille = sa valeur, plusieurs = leur nombre, aucune = 0
+    function pointsFor(fallen) {
+      if (fallen.length === 0) return 0;
+      if (fallen.length === 1) return fallen[0].num;
+      return fallen.length;
+    }
+
+    function fmtTime(ms) {
+      const s = Math.floor(ms / 1000);
+      return `${String(Math.floor(s / 60)).padStart(2, '0')}:${String(s % 60).padStart(2, '0')}`;
+    }
+
+    function fmtDate(at) {
+      const d = new Date(at);
+      const p = n => String(n).padStart(2, '0');
+      return `${p(d.getDate())}/${p(d.getMonth() + 1)} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    }
+
+    // ===== Enregistrement des scores (dans le navigateur, localStorage) =====
+    // Chaque partie terminée est enregistrée : niveau, résultat, score, meilleur score atteint,
+    // nombre de lancers, temps et date. Classement des victoires : le moins de lancers,
+    // puis le temps le plus court. Si le navigateur bloque le stockage, les scores
+    // restent en mémoire le temps de la session.
+    const SCORES = (() => {
+      const KEY = 'molkky-vr-scores-v1';
+      const MAX_GAMES = 500;
+      let data = { games: [] };
+      try {
+        const raw = JSON.parse(localStorage.getItem(KEY));
+        if (raw && Array.isArray(raw.games)) data = raw;
+      } catch (e) { /* stockage indisponible ou illisible */ }
+
+      function save() {
+        try { localStorage.setItem(KEY, JSON.stringify(data)); } catch (e) { /* stockage indisponible */ }
+      }
+      const byBest = (a, b) => a.throws - b.throws || a.ms - b.ms || a.at - b.at;
+      const games = d => data.games.filter(g => g.d === d);
+      const wins = d => games(d).filter(g => g.res === 'win').sort(byBest);
+
+      return {
+        // Enregistre une partie et renvoie son classement (victoires seulement)
+        add(entry) {
+          data.games.push(entry);
+          if (data.games.length > MAX_GAMES) data.games.splice(0, data.games.length - MAX_GAMES);
+          save();
+          if (entry.res !== 'win') return { entry };
+          const w = wins(entry.d);
+          return {
+            entry,
+            rank: w.indexOf(entry) + 1,
+            total: w.length,
+            bestTime: w.every(g => g === entry || g.ms > entry.ms)
+          };
+        },
+        best(d) { return wins(d)[0] || null; },
+        top(d, n) { return wins(d).slice(0, n); },
+        recent(d, n) { return games(d).slice(-n).reverse(); },
+        stats(d) {
+          const all = games(d), w = all.filter(g => g.res === 'win');
+          return {
+            played: all.length,
+            wins: w.length,
+            rate: all.length ? Math.round(100 * w.length / all.length) : 0,
+            bestMs: w.length ? Math.min(...w.map(g => g.ms)) : null,
+            bestPeak: all.length ? Math.max(...all.map(g => g.peak ?? g.score)) : 0
+          };
+        },
+        clear(d) {
+          data.games = data.games.filter(g => g.d !== d);
+          save();
+        }
+      };
+    })();
+
+    // ===== Sons : oiseaux d'ambiance, lancer, chocs du bois =====
+    // Tout est synthétisé avec la Web Audio API : aucun fichier à télécharger.
+    // Les oiseaux et les chocs sont spatialisés (on les entend venir d'une direction, y compris en VR).
+    // Les navigateurs n'autorisent le son qu'après un premier clic / appui : unlock() s'en charge.
+    const SFX = (() => {
+      const SOUND_KEY = 'molkky-vr-sound';
+      let enabled = true;
+      try { enabled = localStorage.getItem(SOUND_KEY) !== 'off'; } catch (e) { /* */ }
+
+      let ctx = null, master = null, ambBus = null, sfxBus = null, noiseBuf = null;
+      let perches = [], birdTimer = null;
+      const listenerPos = new THREE.Vector3();
+      const _q = new THREE.Quaternion(), _f = new THREE.Vector3(), _u = new THREE.Vector3();
+      const rand = (a, b) => a + Math.random() * (b - a);
+      const pick = arr => arr[Math.floor(Math.random() * arr.length)];
+
+      function ensure() {
+        if (!ctx) {
+          const AC = window.AudioContext || window.webkitAudioContext;
+          if (!AC) return null;
+          ctx = new AC();
+          master = ctx.createGain();
+          master.gain.value = enabled ? 1 : 0;
+          master.connect(ctx.destination);
+          ambBus = ctx.createGain(); ambBus.gain.value = 0.7; ambBus.connect(master);
+          sfxBus = ctx.createGain(); sfxBus.gain.value = 0.9; sfxBus.connect(master);
+
+          // 2 s de bruit blanc, réutilisé pour le vent, le lancer et les chocs
+          noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+          const ch = noiseBuf.getChannelData(0);
+          for (let i = 0; i < ch.length; i++) ch[i] = Math.random() * 2 - 1;
+
+          startWind();
+          makePerches();
+          scheduleBird();
+          document.addEventListener('visibilitychange', () => {
+            if (document.hidden) ctx.suspend(); else if (enabled) ctx.resume();
+          });
+        }
+        if (ctx.state === 'suspended' && !document.hidden) ctx.resume();
+        return ctx;
+      }
+
+      function setParam(p, v) { if (p) p.value = v; }
+
+      function panner(pos, ref) {
+        const p = ctx.createPanner();
+        p.panningModel = 'HRTF';
+        p.distanceModel = 'inverse';
+        p.refDistance = ref;
+        p.rolloffFactor = 1;
+        p.maxDistance = 200;
+        if (p.positionX) { setParam(p.positionX, pos.x); setParam(p.positionY, pos.y); setParam(p.positionZ, pos.z); }
+        else p.setPosition(pos.x, pos.y, pos.z);
+        return p;
+      }
+
+      function noise(dest, t, dur, offset) {
+        const s = ctx.createBufferSource();
+        s.buffer = noiseBuf;
+        s.connect(dest);
+        s.start(t, offset ?? Math.random() * 1.5);
+        s.stop(t + dur + 0.05);
+        return s;
+      }
+
+      function env(t, attack, peak, dur) {
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(Math.max(0.0002, peak), t + attack);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+        return g;
+      }
+
+      // Une note d'oiseau : glissando de f0 à f1, avec vibrato optionnel
+      function tone(dest, t, f0, f1, dur, vol, vib = 0, type = 'sine') {
+        const o = ctx.createOscillator();
+        o.type = type;
+        o.frequency.setValueAtTime(f0, t);
+        o.frequency.exponentialRampToValueAtTime(Math.max(30, f1), t + dur);
+        const g = env(t, Math.min(0.015, dur * 0.3), vol, dur);
+        o.connect(g); g.connect(dest);
+        if (vib) {
+          const m = ctx.createOscillator(), mg = ctx.createGain();
+          m.frequency.value = rand(18, 34);
+          mg.gain.value = vib;
+          m.connect(mg); mg.connect(o.frequency);
+          m.start(t); m.stop(t + dur + 0.03);
+        }
+        o.start(t); o.stop(t + dur + 0.03);
+      }
+
+      // ----- Vent léger dans l'herbe (fond continu, très doux) -----
+      function startWind() {
+        const src = ctx.createBufferSource();
+        src.buffer = noiseBuf; src.loop = true;
+        const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 420;
+        const g = ctx.createGain(); g.gain.value = 0.03;
+        const lfo = ctx.createOscillator(), lfoG = ctx.createGain();
+        lfo.frequency.value = 0.07; lfoG.gain.value = 0.018;      // rafales lentes
+        lfo.connect(lfoG); lfoG.connect(g.gain);
+        src.connect(lp); lp.connect(g); g.connect(ambBus);
+        src.start(); lfo.start();
+      }
+
+      // ----- Chants d'oiseaux -----
+      // k = hauteur propre à chaque oiseau ; v = volume
+      const SONGS = {
+        // « ti-tu ti-tu » (type mésange)
+        titi(d, t, k, v) {
+          const n = 3 + Math.floor(Math.random() * 3), hi = 5000 * k, lo = hi * 0.78;
+          for (let i = 0; i < n; i++) {
+            tone(d, t + i * 0.24, hi, hi * 0.97, 0.08, v);
+            tone(d, t + i * 0.24 + 0.11, lo, lo * 0.94, 0.09, v * 0.85);
+          }
+          return n * 0.24;
+        },
+        // trille rapide qui descend, puis petite fioriture (type pinson)
+        trille(d, t, k, v) {
+          const n = 8 + Math.floor(Math.random() * 5);
+          let f = 4300 * k, at = t, gap = 0.065;
+          for (let i = 0; i < n; i++) {
+            tone(d, at, f * 1.12, f * 0.86, 0.045, v * 0.8);
+            at += gap; gap *= 0.96; f *= 0.975;
+          }
+          tone(d, at + 0.03, 3100 * k, 5200 * k, 0.11, v);
+          tone(d, at + 0.16, 4800 * k, 2500 * k, 0.17, v * 0.9);
+          return at - t + 0.35;
+        },
+        // phrase flûtée et vibrée (type merle)
+        merle(d, t, k, v) {
+          const n = 4 + Math.floor(Math.random() * 4);
+          let at = t;
+          for (let i = 0; i < n; i++) {
+            const f = rand(1700, 3000) * k, dur = rand(0.1, 0.26);
+            tone(d, at, f, f * rand(0.85, 1.2), dur, v * rand(0.6, 1), rand(50, 140));
+            at += dur + rand(0.04, 0.13);
+          }
+          return at - t;
+        },
+        // petits cris aigus (type moineau)
+        tweet(d, t, k, v) {
+          const n = 1 + Math.floor(Math.random() * 3);
+          for (let i = 0; i < n; i++) {
+            if (Math.random() < 0.5) tone(d, t + i * 0.15, 3200 * k, 5800 * k, 0.06, v);
+            else tone(d, t + i * 0.15, 5200 * k, 3000 * k, 0.05, v);
+          }
+          return n * 0.15;
+        },
+        // « hou-hou » grave et doux, au loin (type tourterelle)
+        tourterelle(d, t, k, v) {
+          tone(d, t, 620 * k, 580 * k, 0.24, v * 0.6, 6);
+          tone(d, t + 0.34, 600 * k, 520 * k, 0.4, v * 0.7, 6);
+          tone(d, t + 0.9, 560 * k, 500 * k, 0.28, v * 0.5, 6);
+          return 1.2;
+        }
+      };
+
+      // Quelques oiseaux « perchés » autour du terrain, chacun avec son chant et sa voix
+      function makePerches() {
+        const kinds = ['titi', 'trille', 'merle', 'tweet', 'titi', 'tweet', 'tourterelle'];
+        perches = kinds.map(kind => {
+          const a = Math.random() * Math.PI * 2;
+          const far = kind === 'tourterelle';
+          const r = far ? rand(28, 40) : rand(10, 26);
+          return {
+            kind, k: rand(0.9, 1.1), v: far ? 0.35 : rand(0.18, 0.3),
+            pos: { x: Math.cos(a) * r, y: rand(3, 9), z: Math.sin(a) * r }
+          };
+        });
+      }
+
+      function sing(perch) {
+        const t = ctx.currentTime + 0.05;
+        const p = panner(perch.pos, 8);
+        const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 300;
+        hp.connect(p); p.connect(ambBus);
+        return SONGS[perch.kind](hp, t, perch.k, perch.v);
+      }
+
+      function scheduleBird() {
+        birdTimer = setTimeout(() => {
+          if (ctx && ctx.state === 'running' && enabled) {
+            const perch = pick(perches);
+            const dur = sing(perch);
+            // parfois l'oiseau enchaîne, ou un autre lui répond
+            if (Math.random() < 0.35) {
+              const other = Math.random() < 0.5 ? perch : pick(perches);
+              setTimeout(() => { if (ctx.state === 'running' && enabled) sing(other); }, (dur + rand(0.3, 1.2)) * 1000);
+            }
+          }
+          scheduleBird();
+        }, rand(1500, 6000));
+      }
+
+      return {
+        get enabled() { return enabled; },
+
+        unlock() { ensure(); },
+
+        setEnabled(on) {
+          enabled = on;
+          try { localStorage.setItem(SOUND_KEY, on ? 'on' : 'off'); } catch (e) { /* */ }
+          if (on) ensure();
+          if (master) master.gain.setTargetAtTime(on ? 1 : 0, ctx.currentTime, 0.05);
+        },
+
+        // L'oreille suit la tête (caméra) : indispensable pour le son 3D en VR
+        updateListener(obj) {
+          if (!ctx) return;
+          obj.getWorldPosition(listenerPos);
+          obj.getWorldQuaternion(_q);
+          _f.set(0, 0, -1).applyQuaternion(_q);
+          _u.set(0, 1, 0).applyQuaternion(_q);
+          const L = ctx.listener;
+          if (L.positionX) {
+            setParam(L.positionX, listenerPos.x); setParam(L.positionY, listenerPos.y); setParam(L.positionZ, listenerPos.z);
+            setParam(L.forwardX, _f.x); setParam(L.forwardY, _f.y); setParam(L.forwardZ, _f.z);
+            setParam(L.upX, _u.x); setParam(L.upY, _u.y); setParam(L.upZ, _u.z);
+          } else {
+            L.setPosition(listenerPos.x, listenerPos.y, listenerPos.z);
+            L.setOrientation(_f.x, _f.y, _f.z, _u.x, _u.y, _u.z);
+          }
+        },
+
+        // Souffle du lancer : plus le geste est rapide, plus il est fort et aigu
+        whoosh(speed) {
+          if (!ensure() || !enabled) return;
+          const t = ctx.currentTime + 0.005;
+          const s = Math.min(1, Math.max(0.15, speed / 9));
+          const dur = 0.28 + 0.3 * s;
+          const out = ctx.createStereoPanner ? ctx.createStereoPanner() : ctx.createGain();
+          if (out.pan) out.pan.value = 0.25;                       // main droite
+          out.connect(sfxBus);
+
+          const bp = ctx.createBiquadFilter();
+          bp.type = 'bandpass'; bp.Q.value = 1.3;
+          bp.frequency.setValueAtTime(320, t);
+          bp.frequency.exponentialRampToValueAtTime(800 + 1700 * s, t + dur * 0.35);
+          bp.frequency.exponentialRampToValueAtTime(380, t + dur);
+          const g = env(t, dur * 0.3, 0.12 + 0.5 * s, dur);
+          noise(bp, t, dur); bp.connect(g); g.connect(out);
+
+          // fine couche aiguë : le « fffft » de l'air
+          const hp = ctx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 3000;
+          const g2 = env(t, dur * 0.25, 0.04 + 0.12 * s, dur * 0.8);
+          noise(hp, t, dur); hp.connect(g2); g2.connect(out);
+        },
+
+        // Choc : 'wood' = barre/quille contre quille (toc sec), 'ground' = chute dans l'herbe (bruit sourd)
+        impact(pos, strength, kind) {
+          if (!ctx || ctx.state !== 'running' || !enabled) return;
+          const t = ctx.currentTime + 0.002;
+          const p = panner(pos, 2);
+          p.connect(sfxBus);
+          if (kind === 'wood') {
+            const bp = ctx.createBiquadFilter();
+            bp.type = 'bandpass'; bp.frequency.value = rand(1700, 2600); bp.Q.value = 4;
+            const g = env(t, 0.002, 0.9 * strength, 0.05);
+            noise(bp, t, 0.06); bp.connect(g); g.connect(p);
+            const f = rand(650, 1150);
+            tone(p, t, f, f * 0.92, 0.1, 0.4 * strength, 0, 'triangle');
+          } else {
+            const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 380;
+            const g = env(t, 0.004, 0.9 * strength, 0.09);
+            noise(lp, t, 0.1); lp.connect(g); g.connect(p);
+            tone(p, t, 130, 70, 0.11, 0.35 * strength);
+          }
+        }
+      };
+    })();
+
+    // Bruit de choc quand un corps physique en touche un autre (barre ou quille)
+    function onBodyCollide(self, e) {
+      if (GAME.phase !== 'playing') return;
+      const other = e.body;
+      // chaque contact est signalé aux deux corps : on ne le joue qu'une fois
+      if (self._kind === 'pin' && other._kind === 'stick') return;
+      if (self._kind === 'pin' && other._kind === 'pin' && self.id > other.id) return;
+      let v = 0;
+      try { v = Math.abs(e.contact.getImpactVelocityAlongNormal()); } catch (err) { return; }
+      if (v < 0.35) return;
+      const now = performance.now();
+      if (now - (self._sndT || 0) < 70) return;
+      self._sndT = now;
+      SFX.impact(self.position, Math.min(1, v / 5), other.mass === 0 ? 'ground' : 'wood');
+    }
+
+    function setMessage(text) {
+      GAME.message = text;
+      $('actionMsg').textContent = text;
+    }
+
+    function pulse(handEl, intensity, ms) {
+      try {
+        const gp = handEl.components['tracked-controls']?.controller?.gamepad;
+        gp?.hapticActuators?.[0]?.pulse?.(intensity, ms);
+      } catch (e) { /* pas de retour haptique */ }
+    }
+
+    function resetRig() {
+      $('rig').setAttribute('position', '0 0 0');
+      $('rig').setAttribute('rotation', '0 0 0');
+      $('cameraPitch').setAttribute('rotation', '0 0 0');
+    }
+
+    // ===== État de la partie =====
+    //  phase : 'menu' -> 'playing' <-> 'paused' -> 'over'
+    const GAME = {
+      phase: 'menu',
+      difficulty: 'normal',
+      score: 0,
+      throwNo: 1,
+      lastPoints: null,
+      misses: 0,
+      elapsed: 0,
+      message: '',
+      result: null,          // 'win' | 'lose'
+      reason: '',
+      stick: null,           // composant molkky-stick
+      ui: null,              // composant game-manager
+
+      get diff() { return DIFFICULTIES[this.difficulty]; },
+
+      resetStats() {
+        this.score = 0;
+        this.throwNo = 1;
+        this.lastPoints = null;
+        this.misses = 0;
+        this.elapsed = 0;
+        this.result = null;
+        this.reason = '';
+        this.peak = 0;             // meilleur score atteint pendant la partie
+        this.lastRecord = null;    // classement de la partie qui vient de finir
+      },
+
+      // Dans le menu : on voit tout de suite la formation à la bonne distance
+      selectDifficulty(key) {
+        this.difficulty = key;
+        buildPins(this.diff.distance);
+        this.stick.resetStick();
+        this.ui.placeBoard(this.diff.distance);
+        this.ui.refreshMain();
+      },
+
+      start(key) {
+        if (key) this.difficulty = key;
+        this.resetStats();
+        buildPins(this.diff.distance);
+        this.stick.resetStick();
+        resetRig();
+        this.ui.placeBoard(this.diff.distance);
+        this.ui.hideMenus();
+        this.phase = 'playing';
+        setMessage('Attrape la barre au sol avec la main droite (gâchette)');
+      },
+
+      // Appelé quand tout est immobile après un lancer. Renvoie 'win', 'lose' ou null.
+      registerThrow(fallen) {
+        const pts = pointsFor(fallen);
+        this.lastPoints = pts;
+        let msg;
+        if (pts === 0) {
+          this.misses++;
+          msg = `Raté : 0 point (${this.misses}/${MAX_MISSES} échec${this.misses > 1 ? 's' : ''})`;
+        } else {
+          this.misses = 0;
+          this.score += pts;
+          if (fallen.length === 1) {
+            msg = `Quille ${fallen[0].num} tombée : +${pts} point${pts > 1 ? 's' : ''}`;
+          } else {
+            const nums = fallen.map(p => p.num).sort((a, b) => a - b).join(', ');
+            msg = `${fallen.length} quilles tombées (${nums}) : +${pts} points`;
+          }
+          if (this.score > TARGET) {
+            this.score = RESET_TO;
+            msg += ` · Plus de ${TARGET} : retour à ${RESET_TO} !`;
+          }
+        }
+
+        this.peak = Math.max(this.peak, this.score);
+
+        if (this.score === TARGET) {
+          this.result = 'win';
+          this.reason = `Exactement ${TARGET} points en ${this.throwNo} lancer${this.throwNo > 1 ? 's' : ''}`;
+          msg += ' · Victoire !';
+        } else if (this.misses >= MAX_MISSES) {
+          this.result = 'lose';
+          this.reason = `${MAX_MISSES} lancers consécutifs sans point`;
+          msg += ' · Partie perdue';
+        }
+        setMessage(msg);
+        return this.result;
+      },
+
+      nextThrow() { this.throwNo++; },
+
+      finish() {
+        this.lastRecord = SCORES.add({
+          d: this.difficulty, res: this.result, score: this.score, peak: this.peak,
+          throws: this.throwNo, ms: Math.round(this.elapsed), at: Date.now()
+        });
+        this.phase = 'over';
+        this.ui.show('end');
+      },
+
+      pause() {
+        if (this.phase !== 'playing') return;
+        this.phase = 'paused';
+        this.stick.onPause();
+        this.ui.show('pause');
+      },
+
+      resume() {
+        if (this.phase !== 'paused') return;
+        this.phase = 'playing';
+        this.ui.hideMenus();
+      },
+
+      toMenu() {
+        this.phase = 'menu';
+        this.resetStats();
+        buildPins(this.diff.distance);
+        this.stick.resetStick();
+        this.ui.placeBoard(this.diff.distance);
+        this.ui.show('main');
+        setMessage('Choisis une difficulté puis appuie sur Jouer');
+      }
+    };
+
+    // ===== Formation officielle de départ =====
+    //           7  9  8
+    //         5  11 12  6
+    //           3  10  4
+    //             1  2          <- rangée la plus proche du joueur
+    const ROWS = [[1, 2], [3, 10, 4], [5, 11, 12, 6], [7, 9, 8]];
+    function layoutFor(distance) {
+      const d = 2 * PHYS.PIN_R + 0.002;              // diamètre + 2 mm : elles se touchent presque
+      const rowStep = d * Math.sqrt(3) / 2;          // empilement en quinconce
+      const out = [];
+      ROWS.forEach((row, r) => {
+        row.forEach((num, i) => {
+          const x = (i - (row.length - 1) / 2) * d;
+          out.push([x, -distance - r * rowStep, num]);
+        });
+      });
+      return out;
+    }
+    const STICK_START = { x: 0.25, z: -0.15, yaw: Math.PI / 2 };   // bâton posé à côté du pied droit
+
+    let pins = [];
+
+    function setSRGB(tex) {
+      if ('colorSpace' in tex) tex.colorSpace = THREE.SRGBColorSpace;
+      else tex.encoding = THREE.sRGBEncoding;
+    }
+
+    // ===== Manettes visibles =====
+    AFRAME.registerComponent('controller-model', {
+      schema: {
+        color: { default: '#2b2d33' },
+        accent: { default: '#ffa040' }
+      },
+
+      init() {
+        const d = this.data;
+        const body = new THREE.MeshStandardMaterial({ color: d.color, roughness: 0.45, metalness: 0.1 });
+        this.accentMat = new THREE.MeshStandardMaterial({
+          color: d.accent, emissive: d.accent, emissiveIntensity: 0.25, roughness: 0.4
+        });
+        const g = new THREE.Group();
+
+        const grip = new THREE.Mesh(new THREE.CylinderGeometry(0.017, 0.015, 0.105, 16), body);
+        grip.position.set(0, -0.045, 0.035);
+        grip.rotation.x = -0.5;
+        g.add(grip);
+
+        const head = new THREE.Mesh(new THREE.CylinderGeometry(0.026, 0.024, 0.022, 24), body);
+        head.position.set(0, 0.004, -0.005);
+        g.add(head);
+
+        const ring = new THREE.Mesh(new THREE.TorusGeometry(0.042, 0.0055, 10, 40), this.accentMat);
+        ring.rotation.x = Math.PI / 2 - 0.35;
+        ring.position.set(0, 0.008, -0.02);
+        g.add(ring);
+
+        const stem = new THREE.Mesh(new THREE.CylinderGeometry(0.004, 0.004, 0.012, 10), body);
+        stem.position.set(0, 0.021, -0.005);
+        g.add(stem);
+        const cap = new THREE.Mesh(new THREE.CylinderGeometry(0.009, 0.009, 0.005, 16), body);
+        cap.position.set(0, 0.028, -0.005);
+        g.add(cap);
+
+        const trig = new THREE.Mesh(new THREE.BoxGeometry(0.014, 0.03, 0.012), this.accentMat);
+        trig.position.set(0, -0.018, -0.03);
+        trig.rotation.x = 0.4;
+        g.add(trig);
+
+        const beam = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.0015, 0.0015, 0.07, 6),
+          new THREE.MeshBasicMaterial({ color: d.accent, transparent: true, opacity: 0.6 })
+        );
+        beam.rotation.x = Math.PI / 2;
+        beam.position.set(0, 0, -0.06);
+        g.add(beam);
+        const tip = new THREE.Mesh(new THREE.SphereGeometry(0.007, 12, 8), this.accentMat);
+        tip.position.set(0, 0, -0.1);
+        g.add(tip);
+
+        g.visible = false;
+        this.group = g;
+        this.el.setObject3D('controller-model', g);
+        this.el.addEventListener('controllerconnected', () => { g.visible = true; });
+        this.el.addEventListener('controllerdisconnected', () => { g.visible = false; });
+      },
+
+      setHighlight(on) {
+        this.accentMat.emissiveIntensity = on ? 1.3 : 0.25;
+      },
+
+      remove() {
+        this.el.removeObject3D('controller-model');
+      }
+    });
+
+    // ===== Déplacement / rotation avec les sticks =====
     AFRAME.registerComponent('vr-stick-movement', {
-    init: function () {
-        this.moveSpeed = 0.05;       // Vitesse de marche
-        this.turnSpeed = 90;         // Vitesse de rotation horizontale (degrés/seconde)
-        this.pitchSpeed = 70;        // Vitesse d'inclinaison verticale (degrés/seconde)
-        this.deadZone = 0.15;        // Zone morte pour éviter le drift
-        
-        this.moveAxes = [0, 0];      // [x, y] stick gauche
-        this.turnAxis = [0, 0];      // [x, y] stick droit
+      init: function () {
+        this.moveSpeed = 0.05;
+        this.turnSpeed = 90;
+        this.pitchSpeed = 70;
+        this.deadZone = 0.15;
+
+        this.moveAxes = [0, 0];
+        this.turnAxis = [0, 0];
 
         const leftHand = document.getElementById('leftHand');
         const rightHand = document.getElementById('rightHand');
         const cam = document.getElementById('camera');
         this.cameraPitchEl = document.getElementById('cameraPitch');
 
-        // Écoute du joystick gauche (Déplacement)
         leftHand.addEventListener('axismove', (e) => {
-        // Axes 2 et 3 correspondent aux sticks sur Meta Quest / WebXR
-        const x = e.detail.axis[2] !== undefined ? e.detail.axis[2] : e.detail.axis[0];
-        const y = e.detail.axis[3] !== undefined ? e.detail.axis[3] : e.detail.axis[1];
-        this.moveAxes[0] = Math.abs(x) > this.deadZone ? x : 0;
-        this.moveAxes[1] = Math.abs(y) > this.deadZone ? y : 0;
+          const x = e.detail.axis[2] !== undefined ? e.detail.axis[2] : e.detail.axis[0];
+          const y = e.detail.axis[3] !== undefined ? e.detail.axis[3] : e.detail.axis[1];
+          this.moveAxes[0] = Math.abs(x) > this.deadZone ? x : 0;
+          this.moveAxes[1] = Math.abs(y) > this.deadZone ? y : 0;
         });
 
-        // Écoute du joystick droit (Rotation)
         rightHand.addEventListener('axismove', (e) => {
-        const x = e.detail.axis[2] !== undefined ? e.detail.axis[2] : e.detail.axis[0];
-        const y = e.detail.axis[3] !== undefined ? e.detail.axis[3] : e.detail.axis[1];
-        this.turnAxis[0] = Math.abs(x) > this.deadZone ? x : 0;
-        this.turnAxis[1] = Math.abs(y) > this.deadZone ? y : 0;
+          const x = e.detail.axis[2] !== undefined ? e.detail.axis[2] : e.detail.axis[0];
+          const y = e.detail.axis[3] !== undefined ? e.detail.axis[3] : e.detail.axis[1];
+          this.turnAxis[0] = Math.abs(x) > this.deadZone ? x : 0;
+          this.turnAxis[1] = Math.abs(y) > this.deadZone ? y : 0;
         });
 
         this.camEl = cam;
-    },
 
-    tick: function (time, timeDelta) {
-      // Le stick droit tourne le rig horizontalement et incline la vue verticalement.
-      const delta = timeDelta / 1000;
-      if (this.turnAxis[0] !== 0) {
-      const rigRot = this.el.getAttribute('rotation');
-      rigRot.y -= this.turnAxis[0] * this.turnSpeed * delta;
-      this.el.setAttribute('rotation', rigRot);
-      }
+        const scene = this.el.sceneEl;
+        scene.addEventListener('enter-vr', () => {
+          this.cameraPitchEl.setAttribute('position', { x: 0, y: 0, z: 0 });
+        });
+        scene.addEventListener('exit-vr', () => {
+          this.cameraPitchEl.setAttribute('position', { x: 0, y: 1, z: 0 });
+        });
+      },
 
-      if (this.turnAxis[1] !== 0) {
-      const pitchRot = this.cameraPitchEl.getAttribute('rotation');
-      pitchRot.x = THREE.MathUtils.clamp(
-        pitchRot.x + this.turnAxis[1] * this.pitchSpeed * delta,
-        -45,
-        45
-      );
-      this.cameraPitchEl.setAttribute('rotation', pitchRot);
-      }
+      tick: function (time, timeDelta) {
+        const delta = timeDelta / 1000;
 
-        // 2. Déplacement relatif à l'orientation du casque
-        if (this.moveAxes[0] !== 0 || this.moveAxes[1] !== 0) {
-        const rigPos = this.el.getAttribute('position');
-        
-        // Récupère l'orientation combinée (caméra + rig)
-        const camYRot = this.camEl.getAttribute('rotation').y;
-        const rigYRot = this.el.getAttribute('rotation').y;
-        const angleRad = THREE.MathUtils.degToRad(camYRot + rigYRot);
-
-        // Calcul des directions Forward et Right
-        const sin = Math.sin(angleRad);
-        const cos = Math.cos(angleRad);
-
-        const strafe = this.moveAxes[0] * this.moveSpeed;
-        const forward = this.moveAxes[1] * this.moveSpeed;
-
-        // Déplacement dans le plan horizontal X/Z
-        rigPos.x += strafe * cos + forward * sin;
-        rigPos.z += -strafe * sin + forward * cos;
-
-        this.el.setAttribute('position', rigPos);
+        if (this.turnAxis[0] !== 0) {
+          const rigRot = this.el.getAttribute('rotation');
+          rigRot.y -= this.turnAxis[0] * this.turnSpeed * delta;
+          this.el.setAttribute('rotation', rigRot);
         }
-    }
+
+        if (this.turnAxis[1] !== 0) {
+          const pitchRot = this.cameraPitchEl.getAttribute('rotation');
+          pitchRot.x = THREE.MathUtils.clamp(
+            pitchRot.x + this.turnAxis[1] * this.pitchSpeed * delta,
+            -45,
+            45
+          );
+          this.cameraPitchEl.setAttribute('rotation', pitchRot);
+        }
+
+        if (this.moveAxes[0] !== 0 || this.moveAxes[1] !== 0) {
+          const rigPos = this.el.getAttribute('position');
+
+          const camYRot = this.camEl.getAttribute('rotation').y;
+          const rigYRot = this.el.getAttribute('rotation').y;
+          const angleRad = THREE.MathUtils.degToRad(camYRot + rigYRot);
+
+          const sin = Math.sin(angleRad);
+          const cos = Math.cos(angleRad);
+
+          const strafe = this.moveAxes[0] * this.moveSpeed;
+          const forward = this.moveAxes[1] * this.moveSpeed;
+
+          rigPos.x += strafe * cos + forward * sin;
+          rigPos.z += -strafe * sin + forward * cos;
+
+          this.el.setAttribute('position', rigPos);
+        }
+      }
     });
 
-    // Support complet clavier ZQSD (en plus de WASD natif)
+    // Support clavier ZQSD (en plus de WASD natif)
     window.addEventListener('keydown', e => {
       const wasd = $('camera').components['wasd-controls'];
       if (!wasd) return;
@@ -217,118 +1113,1310 @@
       if (k === 'd') wasd.keys.KeyD = false;
     });
 
-    function buildPins() {
+    // ===== Quilles (visuel + corps physique) =====
+    const WOOD_COLOR = '#dfb887';
+
+    function makePinGeometry() {
+      const g = new THREE.CylinderGeometry(PHYS.PIN_R, PHYS.PIN_R, 1, 32, 1);
+      const pos = g.attributes.position;
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i);
+        const y = pos.getY(i) > 0 ? PHYS.PIN_HM + PHYS.PIN_CUT * x : 0;
+        pos.setXYZ(i, x - PHYS.PIN_COM_X, y - PHYS.PIN_COM_Y, pos.getZ(i));
+      }
+      g.computeVertexNormals();
+      return g;
+    }
+    let PIN_GEOMETRY = null;
+    let WOOD_MAT = null;
+    const TOP_MATS = {};       // une face numérotée par numéro, réutilisée d'une partie à l'autre
+
+    // Numéro peint sur la face biseautée, comme sur un vrai Mölkky.
+    function makeNumberTexture(num) {
+      const S = 256;
+      const c = document.createElement('canvas');
+      c.width = c.height = S;
+      const ctx = c.getContext('2d');
+
+      ctx.fillStyle = WOOD_COLOR;
+      ctx.fillRect(0, 0, S, S);
+
+      ctx.save();
+      ctx.translate(S / 2, S / 2);
+      ctx.scale(1, Math.cos(Math.atan(PHYS.PIN_CUT)));     // compensation du biseau
+
+      ctx.strokeStyle = 'rgba(70, 40, 15, 0.45)';
+      ctx.lineWidth = 8;
+      ctx.beginPath();
+      ctx.arc(0, 0, S * 0.44, 0, Math.PI * 2);
+      ctx.stroke();
+
+      const txt = String(num);
+      let size = 170;
+      ctx.font = `900 ${size}px "Arial Black", Arial, sans-serif`;
+      const w = ctx.measureText(txt).width;
+      if (w > S * 0.62) {
+        size *= (S * 0.62) / w;
+        ctx.font = `900 ${size}px "Arial Black", Arial, sans-serif`;
+      }
+      ctx.fillStyle = '#2d1806';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(txt, 0, 6);
+
+      if (num === 6 || num === 9) {
+        ctx.fillRect(-size * 0.28, size * 0.42, size * 0.56, size * 0.08);
+      }
+      ctx.restore();
+
+      const tex = new THREE.CanvasTexture(c);
+      setSRGB(tex);
+      tex.anisotropy = 8;
+      return tex;
+    }
+
+    // (Re)construit la formation à la distance voulue
+    function buildPins(distance) {
+      PHYS.clearPins();
       const wrap = $('pins');
       wrap.innerHTML = '';
       pins = [];
+      if (!PIN_GEOMETRY) PIN_GEOMETRY = makePinGeometry();
+      if (!WOOD_MAT) WOOD_MAT = new THREE.MeshStandardMaterial({ color: WOOD_COLOR, roughness: 0.6 });
 
-      LAYOUT.forEach(([x, z, num]) => {
-        const h = 0.15 + (num * 0.01);
+      layoutFor(distance).forEach(([x, z, num]) => {
+        if (!TOP_MATS[num]) {
+          TOP_MATS[num] = new THREE.MeshStandardMaterial({ map: makeNumberTexture(num), roughness: 0.6 });
+        }
         const g = document.createElement('a-entity');
-        g.setAttribute('position', `${x} 0 ${z}`);
-
-        const body = document.createElement('a-cylinder');
-        body.setAttribute('radius', 0.038);
-        body.setAttribute('height', h);
-        body.setAttribute('position', `0 ${h / 2} 0`);
-        body.setAttribute('color', '#dfb887');
-        body.setAttribute('roughness', '0.6');
-
-        const label = document.createElement('a-text');
-        label.setAttribute('value', num);
-        label.setAttribute('align', 'center');
-        label.setAttribute('color', '#2d1806');
-        label.setAttribute('width', 2);
-        label.setAttribute('position', `0 ${h + 0.03} 0`);
-        label.setAttribute('rotation', '-90 0 0');
-
-        g.appendChild(body);
-        g.appendChild(label);
+        g.setObject3D('mesh', new THREE.Mesh(PIN_GEOMETRY, [WOOD_MAT, TOP_MATS[num], WOOD_MAT]));
         wrap.appendChild(g);
-        pins.push({ el: g, x, z, num, standing: true });
+        const body = PHYS.makePin(x, z, PHYS.PIN_FACE_YAW);
+        body._kind = 'pin';
+        body.addEventListener('collide', e => onBodyCollide(body, e));
+        pins.push({ el: g, num, body, fallen: false });
+      });
+      syncPins();
+    }
+
+    function syncPins() {
+      pins.forEach(p => {
+        p.el.object3D.position.copy(p.body.position);
+        p.el.object3D.quaternion.copy(p.body.quaternion);
       });
     }
 
-    buildPins();
+    // ===== Réglages du lancer =====
+    const HOLD_DIST = 0.1;
+    const UP = new THREE.Vector3(0, 1, 0);
 
-    function resetStick() {
-      stick.vx = 0; stick.vz = 0; stick.moving = false; stick.hits = new Set();
-      $('stick').setAttribute('position', { ...STICK_START });
+    // Petit disque rond pour les points de la trajectoire
+    function makeDotTexture() {
+      const c = document.createElement('canvas');
+      c.width = c.height = 64;
+      const ctx = c.getContext('2d');
+      const grd = ctx.createRadialGradient(32, 32, 4, 32, 32, 30);
+      grd.addColorStop(0, 'rgba(255,255,255,1)');
+      grd.addColorStop(0.6, 'rgba(255,255,255,0.9)');
+      grd.addColorStop(1, 'rgba(255,255,255,0)');
+      ctx.fillStyle = grd;
+      ctx.beginPath(); ctx.arc(32, 32, 30, 0, Math.PI * 2); ctx.fill();
+      return new THREE.CanvasTexture(c);
     }
 
-    function launchStick(aimX, powerZ) {
-      if (stick.moving) return;
-      stick.vx = aimX;
-      stick.vz = powerZ;
-      stick.moving = true;
-      stick.hits = new Set();
-      $('actionMsg').textContent = 'Lancé !';
-    }
+    // ===== Composant de la barre + boucle de jeu =====
+    AFRAME.registerComponent('molkky-stick', {
+      schema: {
+        grabDist: { default: 0.7 },
+        returnDelay: { default: 1800 },
+        boost: { default: 1.5 },
+        maxSpeed: { default: 13 },
+        spinScale: { default: 0.4 },
+        maxSpin: { default: 10 }
+      },
 
-    // Déplacement et collisions
-    setInterval(() => {
-      if (!stick.moving) return;
-      const el = $('stick');
-      const pos = el.getAttribute('position');
+      init() {
+        // États : ground -> holding -> flying -> waiting -> raising -> returning -> ready -> holding ...
+        //         (flying -> ending -> over quand la partie est terminée)
+        this.state = 'ground';
+        this.hand = $('rightHand');
+        this.vel = new THREE.Vector3();
+        this.spin = new THREE.Vector3();
+        this.handPos = new THREE.Vector3();
+        this.handPrev = new THREE.Vector3();
+        this.handVel = new THREE.Vector3();
+        this.handAng = new THREE.Vector3();
+        this.handQuat = new THREE.Quaternion();
+        this.handQuatPrev = new THREE.Quaternion();
+        this.dq = new THREE.Quaternion();
+        this.dir = new THREE.Vector3();
+        this.fwd = new THREE.Vector3(0, 0, -1);
+        this.tmp = new THREE.Vector3();
+        this.p = new THREE.Vector3();
+        this.from = new THREE.Vector3();
+        this.fromQuat = new THREE.Quaternion();
+        this.toQuat = new THREE.Quaternion();
+        // vecteurs de travail du calcul de lancer
+        this._v = new THREE.Vector3(); this._w = new THREE.Vector3();
+        this._bv = new THREE.Vector3(); this._bw = new THREE.Vector3();
+        this._lever = new THREE.Vector3(); this._cross = new THREE.Vector3();
+        this.pv = new THREE.Vector3(); this.ps = new THREE.Vector3();
+        this.history = [];
+        this.yaw = STICK_START.yaw;
+        this.timer = 0;
+        this.flyTime = 0;
+        this.stillTime = 0;
+        this.t = 0;
+        this.raise = [];
 
-      pos.x += stick.vx * 0.05;
-      pos.z += stick.vz * 0.05;
-      stick.vx *= 0.94;
-      stick.vz *= 0.94;
-      el.setAttribute('position', pos);
+        buildPins(DIFFICULTIES[GAME.difficulty].distance);
+        this.body = PHYS.makeStick(STICK_START.x, STICK_START.z, STICK_START.yaw);
+        this.body._kind = 'stick';
+        this.body.addEventListener('collide', e => onBodyCollide(this.body, e));
+        this.syncStickFromBody();
 
-      pins.forEach(p => {
-        if (p.standing && !stick.hits.has(p.num)) {
-          const d = Math.hypot(pos.x - p.x, pos.z - p.z);
-          if (d < HIT_R) {
-            stick.hits.add(p.num);
-            knockPin(p);
+        this.pressed = { trigger: false, grip: false };
+        this.holdButton = null;
+        const h = $('rightHand');
+        h.addEventListener('triggerdown', () => this.onDown(h, 'trigger'));
+        h.addEventListener('triggerup', () => this.onUp(h, 'trigger'));
+        h.addEventListener('gripdown', () => this.onDown(h, 'grip'));
+        h.addEventListener('gripup', () => this.onUp(h, 'grip'));
+
+        this.initGrabHelpers();
+        this.initPreview();
+      },
+
+      // Remet la barre au sol, à côté du joueur (nouvelle partie / menu)
+      resetStick() {
+        this.state = 'ground';
+        this.holdButton = null;
+        this.history.length = 0;
+        this.raise = [];
+        this.yaw = STICK_START.yaw;
+        PHYS.setStickHeld(this.body, false);
+        this.body.position.set(STICK_START.x, PHYS.STICK_R, STICK_START.z);
+        this.body.quaternion.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), STICK_START.yaw);
+        this.body.velocity.set(0, 0, 0);
+        this.body.angularVelocity.set(0, 0, 0);
+        this.body.sleep();
+        this.syncStickFromBody();
+      },
+
+      // Pause pendant qu'on tient la barre : elle reste en main, sans lancer
+      onPause() {
+        if (this.state === 'holding') {
+          this.state = 'ready';
+          this.holdButton = null;
+        }
+      },
+
+      // ----- Aides visuelles pour attraper la barre (Facile / Normal) -----
+      initGrabHelpers() {
+        const scene = this.el.sceneEl.object3D;
+        const r = this.data.grabDist;
+
+        this.zoneMat = new THREE.MeshBasicMaterial({
+          color: '#ffffff', transparent: true, opacity: 0.4, depthWrite: false, side: THREE.DoubleSide
+        });
+        this.zone = new THREE.Mesh(new THREE.RingGeometry(r - 0.025, r, 64), this.zoneMat);
+        this.zone.rotation.x = -Math.PI / 2;
+        this.zone.visible = false;
+        scene.add(this.zone);
+
+        this.handDot = new THREE.Mesh(
+          new THREE.CircleGeometry(0.035, 24),
+          new THREE.MeshBasicMaterial({ color: '#ffa040', transparent: true, opacity: 0.55, depthWrite: false })
+        );
+        this.handDot.rotation.x = -Math.PI / 2;
+        this.handDot.visible = false;
+        scene.add(this.handDot);
+
+        this.inRange = false;
+        this.handConnected = false;
+        this.hand.addEventListener('controllerconnected', () => { this.handConnected = true; });
+        this.hand.addEventListener('controllerdisconnected', () => { this.handConnected = false; });
+      },
+
+      stickMaterial() {
+        const mesh = this.el.querySelector('a-cylinder')?.getObject3D('mesh');
+        return mesh ? mesh.material : null;
+      },
+
+      setInRange(on) {
+        if (on === this.inRange) return;
+        this.inRange = on;
+        this.zoneMat.color.set(on ? '#5dff7a' : '#ffffff');
+        this.zoneMat.opacity = on ? 0.75 : 0.4;
+        const m = this.stickMaterial();
+        if (m && m.emissive) m.emissive.set(on ? '#6a4310' : '#000000');
+        this.hand.components['controller-model']?.setHighlight(on);
+        if (on) pulse(this.hand, 0.35, 35);
+      },
+
+      updateGrabHelpers() {
+        const active = this.handConnected && GAME.phase === 'playing' && GAME.diff.helpers;
+        if (!active) {
+          this.zone.visible = false;
+          this.handDot.visible = false;
+          this.setInRange(false);
+          return;
+        }
+        this.hand.object3D.getWorldPosition(this.tmp);
+        this.handDot.position.set(this.tmp.x, 0.004, this.tmp.z);
+        this.handDot.visible = true;
+
+        if (this.state === 'ground') {
+          const s = this.el.object3D.position;
+          this.zone.position.set(s.x, 0.003, s.z);
+          this.zone.visible = true;
+          this.setInRange(Math.hypot(this.tmp.x - s.x, this.tmp.z - s.z) <= this.data.grabDist);
+        } else {
+          this.zone.visible = false;
+          this.setInRange(false);
+        }
+      },
+
+      // ----- Assistance au lancer (Facile) : trajectoire prévue + point de chute -----
+      initPreview() {
+        const scene = this.el.sceneEl.object3D;
+        this.PREVIEW_MAX = 70;
+        const geo = new THREE.BufferGeometry();
+        geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(this.PREVIEW_MAX * 3), 3));
+        this.previewDots = new THREE.Points(geo, new THREE.PointsMaterial({
+          color: '#ffe08a', size: 0.03, map: makeDotTexture(), transparent: true,
+          depthWrite: false, sizeAttenuation: true
+        }));
+        this.previewDots.frustumCulled = false;
+        this.previewDots.visible = false;
+        scene.add(this.previewDots);
+
+        this.previewMark = new THREE.Mesh(
+          new THREE.RingGeometry(0.09, 0.13, 40),
+          new THREE.MeshBasicMaterial({ color: '#ffe08a', transparent: true, opacity: 0.8, depthWrite: false, side: THREE.DoubleSide })
+        );
+        this.previewMark.rotation.x = -Math.PI / 2;
+        this.previewMark.visible = false;
+        scene.add(this.previewMark);
+      },
+
+      updatePreview() {
+        const show = this.state === 'holding' && GAME.phase === 'playing' && GAME.diff.trajectory;
+        if (!show) {
+          this.previewDots.visible = false;
+          this.previewMark.visible = false;
+          return;
+        }
+        this.computeThrow(this.pv, this.ps);
+        if (this.pv.length() < 1) {           // main presque immobile : rien à prévoir
+          this.previewDots.visible = false;
+          this.previewMark.visible = false;
+          return;
+        }
+        const arr = this.previewDots.geometry.attributes.position.array;
+        const s = this.el.object3D.position;
+        let x = s.x, y = Math.max(s.y, PHYS.STICK_R + 0.01), z = s.z;
+        let vx = this.pv.x, vy = this.pv.y, vz = this.pv.z;
+        const dt = 0.03, g = PHYS.GRAVITY;
+        let n = 0;
+        for (let i = 0; i < this.PREVIEW_MAX; i++) {
+          arr[n * 3] = x; arr[n * 3 + 1] = Math.max(y, 0.01); arr[n * 3 + 2] = z;
+          n++;
+          if (i > 0 && y <= PHYS.STICK_R) break;
+          vy -= g * dt;
+          x += vx * dt; y += vy * dt; z += vz * dt;
+        }
+        this.previewDots.geometry.setDrawRange(0, n);
+        this.previewDots.geometry.attributes.position.needsUpdate = true;
+        this.previewDots.visible = true;
+        this.previewMark.position.set(arr[(n - 1) * 3], 0.006, arr[(n - 1) * 3 + 2]);
+        this.previewMark.visible = true;
+      },
+
+      syncStickFromBody() {
+        this.el.object3D.position.copy(this.body.position);
+        this.el.object3D.quaternion.copy(this.body.quaternion);
+      },
+
+      syncBodyFromStick() {
+        const o = this.el.object3D;
+        this.body.position.set(o.position.x, o.position.y, o.position.z);
+        this.body.quaternion.set(o.quaternion.x, o.quaternion.y, o.quaternion.z, o.quaternion.w);
+      },
+
+      // ----- 1. Attraper / tenir la barre -----
+      onDown(h, button) {
+        this.pressed[button] = true;
+        if (GAME.phase !== 'playing') return;              // dans un menu, la gâchette sert aux boutons
+        if (this.state === 'holding') return;
+        if (this.state === 'ground') {
+          h.object3D.getWorldPosition(this.tmp);
+          const s = this.el.object3D.position;
+          const d = Math.hypot(this.tmp.x - s.x, this.tmp.z - s.z);
+          if (d > this.data.grabDist) return;
+          this.hand = h;
+          this.readHand(0);
+          this.handVel.set(0, 0, 0);
+          this.handAng.set(0, 0, 0);
+          PHYS.setStickHeld(this.body, true);
+          this.startHolding(button);
+        } else if (this.state === 'ready' && h === this.hand) {
+          this.startHolding(button);
+        }
+      },
+
+      onUp(h, button) {
+        this.pressed[button] = false;
+        if (GAME.phase !== 'playing') return;
+        if (this.state === 'holding' && h === this.hand && button === this.holdButton) this.throwStick();
+      },
+
+      startHolding(button) {
+        this.history.length = 0;
+        this.holdButton = button;
+        this.state = 'holding';
+        setMessage('Balance le bras et relâche le bouton pour lancer !');
+      },
+
+      readHand(dt) {
+        this.hand.object3D.getWorldPosition(this.handPos);
+        this.hand.object3D.getWorldQuaternion(this.handQuat);
+
+        if (dt > 0) {
+          this.handVel.copy(this.handPos).sub(this.handPrev).divideScalar(dt);
+
+          this.dq.copy(this.handQuatPrev).invert().premultiply(this.handQuat);
+          if (this.dq.w < 0) { this.dq.x *= -1; this.dq.y *= -1; this.dq.z *= -1; this.dq.w *= -1; }
+          const s = Math.sqrt(Math.max(0, 1 - this.dq.w * this.dq.w));
+          if (s > 1e-5) {
+            const angle = 2 * Math.acos(Math.min(1, this.dq.w));
+            this.handAng.set(this.dq.x / s, this.dq.y / s, this.dq.z / s).multiplyScalar(angle / dt);
+          } else {
+            this.handAng.set(0, 0, 0);
+          }
+
+          this.history.push({ v: this.handVel.clone(), w: this.handAng.clone(), dt });
+          if (this.history.length > 12) this.history.shift();
+        }
+        this.handPrev.copy(this.handPos);
+        this.handQuatPrev.copy(this.handQuat);
+
+        this.dir.set(0, 0, -1).applyQuaternion(this.handQuat);
+        const h = Math.hypot(this.dir.x, this.dir.z);
+        if (h > 0.2) {
+          this.fwd.set(this.dir.x / h, 0, this.dir.z / h);
+          this.yaw = Math.atan2(this.fwd.z, -this.fwd.x);
+        }
+      },
+
+      holdPos(out) {
+        out.copy(this.handPos);
+        out.x += this.fwd.x * HOLD_DIST;
+        out.z += this.fwd.z * HOLD_DIST;
+        return out;
+      },
+
+      followHand() {
+        const o = this.el.object3D;
+        o.position.copy(this.holdPos(this.p));
+        o.quaternion.setFromAxisAngle(UP, this.yaw);
+        this.syncBodyFromStick();
+      },
+
+      // Calcule la vitesse et la rotation qu'aurait la barre si on la lâchait maintenant.
+      // Sert au vrai lancer et à la trajectoire prévue (Facile). Renvoie l'orientation de départ.
+      computeThrow(outVel, outSpin) {
+        const H = this.history, W = Math.min(3, H.length);
+        const v = this._v, w = this._w;
+        let bestLen = -1;
+        for (let i = W - 1; i < H.length; i++) {
+          v.set(0, 0, 0); w.set(0, 0, 0);
+          let t = 0;
+          for (let k = i - W + 1; k <= i; k++) {
+            v.addScaledVector(H[k].v, H[k].dt);
+            w.addScaledVector(H[k].w, H[k].dt);
+            t += H[k].dt;
+          }
+          if (t <= 0) continue;
+          v.divideScalar(t); w.divideScalar(t);
+          if (v.length() > bestLen) { bestLen = v.length(); this._bv.copy(v); this._bw.copy(w); }
+        }
+
+        outVel.set(0, 0, 0);
+        outSpin.set(0, 0, 0);
+        if (bestLen >= 0) {
+          // effet de levier du poignet (barre tenue devant la main)
+          this._lever.set(this.fwd.x * HOLD_DIST, 0, this.fwd.z * HOLD_DIST);
+          this._cross.crossVectors(this._bw, this._lever);
+          outVel.copy(this._bv).add(this._cross).multiplyScalar(this.data.boost);
+          outSpin.copy(this._bw).multiplyScalar(this.data.spinScale);
+        }
+        const sp = outVel.length();
+        if (sp > this.data.maxSpeed) outVel.multiplyScalar(this.data.maxSpeed / sp);
+        const sw = outSpin.length();
+        if (sw > this.data.maxSpin) outSpin.multiplyScalar(this.data.maxSpin / sw);
+
+        const hs = Math.hypot(outVel.x, outVel.z);
+        return hs > 0.3 ? Math.atan2(outVel.z, -outVel.x) : this.yaw;
+      },
+
+      // ----- 2. Lancer : la barre devient un objet physique -----
+      throwStick() {
+        this.yaw = this.computeThrow(this.vel, this.spin);
+        this.el.object3D.quaternion.setFromAxisAngle(UP, this.yaw);
+        const o = this.el.object3D;
+        o.position.y = Math.max(o.position.y, PHYS.STICK_R + 0.01);
+        this.syncBodyFromStick();
+
+        PHYS.setStickHeld(this.body, false);
+        PHYS.keepAwake(pins.map(p => p.body), true);
+        this.body.velocity.set(this.vel.x, this.vel.y, this.vel.z);
+        this.body.angularVelocity.set(this.spin.x, this.spin.y, this.spin.z);
+        SFX.whoosh(this.vel.length());
+
+        this.flyTime = 0;
+        this.stillTime = 0;
+        this.state = 'flying';
+        setMessage(`Lancer n° ${GAME.throwNo} : lancé !`);
+      },
+
+      watchThrow(dt) {
+        this.flyTime += dt;
+        const bodies = [this.body, ...pins.map(p => p.body)];
+        this.stillTime = PHYS.isStill(bodies) ? this.stillTime + dt : 0;
+        if ((this.flyTime > 0.5 && this.stillTime > 0.4) || this.flyTime > 10) this.settle();
+      },
+
+      // Tout est immobile : on compte les points
+      settle() {
+        this.timer = 0;
+        PHYS.keepAwake(pins.map(p => p.body), false);
+        pins.forEach(p => {
+          p.fallen = PHYS.isFallen(p.body);
+          p.leaning = PHYS.isLeaning(p.body);   // appuyée sur une autre : ne compte pas, mais sera redressée
+        });
+        const result = GAME.registerThrow(pins.filter(p => p.fallen));
+        if (result) {
+          this.state = 'ending';           // victoire ou défaite : menu de fin après un court délai
+        } else {
+          this.state = 'waiting';
+        }
+      },
+
+      // ----- 3. Relever les quilles là où leur haut est tombé -----
+      startRaise() {
+        PHYS.setStickHeld(this.body, true);
+        GAME.nextThrow();
+
+        const targets = PHYS.planRaise(pins);
+        this.raise = [];
+        pins.forEach((p, i) => {
+          // Tombée : relevée là où est son haut. Penchée : redressée sur sa base.
+          if (!p.fallen && !p.leaning) return;
+          const x = targets[i].x, z = targets[i].z, yaw = PHYS.PIN_FACE_YAW;
+          const pose = PHYS.standingPose(x, z, yaw);
+          const to = new THREE.Vector3(pose.pos.x, pose.pos.y, pose.pos.z);
+          const toQ = new THREE.Quaternion(pose.quat.x, pose.quat.y, pose.quat.z, pose.quat.w);
+          this.raise.push({
+            p, x, z, yaw, to, toQ,
+            from: new THREE.Vector3().copy(p.body.position),
+            fromQ: new THREE.Quaternion().copy(p.body.quaternion)
+          });
+        });
+        this.t = 0;
+        this.state = 'raising';
+      },
+
+      raisePins(dt) {
+        this.t = Math.min(this.t + dt / 0.35, 1);
+        const e = this.t * this.t * (3 - 2 * this.t);
+        this.raise.forEach(r => {
+          const o = r.p.el.object3D;
+          o.position.lerpVectors(r.from, r.to, e);
+          o.quaternion.copy(r.fromQ).slerp(r.toQ, e);
+        });
+        if (this.t < 1) return;
+
+        this.raise.forEach(r => {
+          PHYS.placeStanding(r.p.body, r.x, r.z, r.yaw);
+          r.p.fallen = false;
+          r.p.leaning = false;
+        });
+        pins.forEach(p => p.body.wakeUp());
+        this.startReturn();
+      },
+
+      // ----- 4. Retour automatique de la barre dans la main -----
+      startReturn() {
+        this.from.copy(this.el.object3D.position);
+        this.fromQuat.copy(this.el.object3D.quaternion);
+        this.t = 0;
+        this.state = 'returning';
+      },
+
+      returnToHand(dt) {
+        const o = this.el.object3D;
+        this.t = Math.min(this.t + dt / 0.7, 1);
+        const e = this.t * this.t * (3 - 2 * this.t);
+        this.holdPos(this.p);
+        this.toQuat.setFromAxisAngle(UP, this.yaw);
+        o.position.lerpVectors(this.from, this.p, e);
+        o.position.y += Math.sin(Math.PI * e) * 0.3;
+        o.quaternion.copy(this.fromQuat).slerp(this.toQuat, e);
+        this.syncBodyFromStick();
+        if (this.t >= 1) {
+          const held = this.pressed.trigger ? 'trigger' : (this.pressed.grip ? 'grip' : null);
+          if (held) {
+            this.startHolding(held);
+          } else {
+            this.state = 'ready';
+            setMessage(`Lancer n° ${GAME.throwNo} : maintiens la gâchette, puis relâche en lançant`);
           }
         }
-      });
+      },
 
-      const speed = Math.hypot(stick.vx, stick.vz);
-      if (speed < 0.02 || pos.z < -2.6 || Math.abs(pos.x) > 1.5) {
-        stick.moving = false;
-        finishThrow();
+      tick(time, dtMs) {
+        const dt = Math.min(dtMs / 1000, 0.05);
+
+        if (GAME.phase === 'paused') {          // tout est figé pendant la pause
+          this.updateGrabHelpers();
+          this.updatePreview();
+          return;
+        }
+
+        switch (this.state) {
+          case 'holding':
+          case 'ready':
+            this.readHand(dt); this.followHand(); break;
+          case 'waiting':
+            this.timer += dtMs;
+            if (this.timer >= this.data.returnDelay) this.startRaise();
+            break;
+          case 'ending':
+            this.timer += dtMs;
+            if (this.timer >= this.data.returnDelay) {
+              this.state = 'over';
+              GAME.finish();
+            }
+            break;
+          case 'raising':
+            this.raisePins(dt);
+            this.updateGrabHelpers();
+            this.updatePreview();
+            return;
+          case 'returning':
+            this.readHand(dt); this.returnToHand(dt); break;
+        }
+
+        PHYS.step(dt);
+        syncPins();
+        if (this.state === 'ground' || this.state === 'flying' || this.state === 'waiting' ||
+            this.state === 'ending' || this.state === 'over') {
+          this.syncStickFromBody();
+        }
+        if (this.state === 'flying') this.watchThrow(dt);
+        this.updateGrabHelpers();
+        this.updatePreview();
       }
-    }, 16);
+    });
 
-    function knockPin(p) {
-      p.standing = false;
-      p.el.setAttribute('animation', 'property: rotation; to: -75 0 25; dur: 220; easing: easeOutQuad');
+    // =====================================================================
+    // ===== Interface 3D : panneaux dessinés sur canvas (accents OK) =====
+    // =====================================================================
+    // Palette pastel : crème, lavande, rose poudré et sauge.
+    const C = {
+      bg: 'rgba(255, 250, 248, 0.97)',
+      ink: '#514653',
+      muted: '#8b7e91',
+      accent: '#c7b4e2',
+      green: '#91bda7',
+      red: '#d98f9c',
+      btn: '#eee6f3',
+      btnHover: '#dfd1ec',
+      primary: '#d9b5c5',
+      primaryHover: '#c99eb6'
+    };
+    const FONT = '"Nunito", "Segoe UI", Roboto, Arial, sans-serif';
+
+    function roundRect(ctx, x, y, w, h, r) {
+      ctx.beginPath();
+      ctx.moveTo(x + r, y);
+      ctx.arcTo(x + w, y, x + w, y + h, r);
+      ctx.arcTo(x + w, y + h, x, y + h, r);
+      ctx.arcTo(x, y + h, x, y, r);
+      ctx.arcTo(x, y, x + w, y, r);
+      ctx.closePath();
     }
 
-    function standPin(p) {
-      p.standing = true;
-      p.el.setAttribute('animation', 'property: rotation; to: 0 0 0; dur: 260; easing: easeOutQuad');
+    function text(ctx, str, x, y, size, weight, color, align = 'left', maxW = 0) {
+      ctx.font = `${weight} ${size}px ${FONT}`;
+      if (maxW > 0) {
+        const w = ctx.measureText(str).width;
+        if (w > maxW) ctx.font = `${weight} ${size * maxW / w}px ${FONT}`;
+      }
+      ctx.fillStyle = color;
+      ctx.textAlign = align;
+      ctx.textBaseline = 'middle';
+      ctx.fillText(str, x, y);
     }
 
-    function finishThrow() {
-      const n = stick.hits.size;
-      $('statusMsg').textContent = n > 0 ? `${n} quille${n > 1 ? 's' : ''} tombée${n > 1 ? 's' : ''} !` : 'Raté.';
-      setTimeout(() => {
-        pins.forEach(p => { if (!p.standing) standPin(p); });
-        resetStick();
-        setTimeout(() => $('actionMsg').textContent = "Face à la quille 1", 500);
-      }, 900);
+    function wrapText(ctx, str, cx, y, maxW, size, lineH, color) {
+      ctx.font = `500 ${size}px ${FONT}`;
+      const words = str.split(' ');
+      const lines = [];
+      let line = '';
+      for (const w of words) {
+        const test = line ? line + ' ' + w : w;
+        if (ctx.measureText(test).width > maxW && line) { lines.push(line); line = w; }
+        else line = test;
+      }
+      if (line) lines.push(line);
+      lines.forEach((l, i) => text(ctx, l, cx, y + i * lineH, size, 500, color, 'center'));
     }
 
-    // Lancer avec la gâchette des manettes VR
-    const leftController = $('leftHand');
-    const rightController = $('rightHand');
-
-    function handleVRTrigger() {
-    launchStick(0, -1.1);
+    function panelBackground(ctx, W, H) {
+      ctx.save();
+      // Ombre douce portée par le panneau principal.
+      ctx.shadowColor = 'rgba(77, 57, 91, 0.28)';
+      ctx.shadowBlur = 3.2;
+      ctx.shadowOffsetX = 0;
+      ctx.shadowOffsetY = 1.2;
+      roundRect(ctx, 0.8, 0.8, W - 1.6, H - 1.6, 4);
+      ctx.fillStyle = C.bg;
+      ctx.fill();
+      ctx.restore();
+      roundRect(ctx, 0.8, 0.8, W - 1.6, H - 1.6, 4);
+      ctx.strokeStyle = 'rgba(199, 180, 226, 0.95)';
+      ctx.lineWidth = 0.45;
+      ctx.stroke();
     }
 
-    // Événements gâchette A-Frame / WebXR
-    leftController.addEventListener('triggerdown', handleVRTrigger);
-    rightController.addEventListener('triggerdown', handleVRTrigger);
+    // Fond bois clair : dégradé, veinures fines et nœuds discrets, dessinés en canvas.
+    function woodPanelBackground(ctx, W, H) {
+      ctx.save();
+      roundRect(ctx, 0.8, 0.8, W - 1.6, H - 1.6, 4);
+      ctx.clip();
+      const wood = ctx.createLinearGradient(0, 0, W, H);
+      wood.addColorStop(0, '#f4dfc2');
+      wood.addColorStop(0.48, '#e8c99f');
+      wood.addColorStop(1, '#d8b384');
+      ctx.fillStyle = wood;
+      ctx.fillRect(0, 0, W, H);
+      // Veinures horizontales irrégulières pour un rendu bois stylisé.
+      for (let i = 0; i < 18; i++) {
+        const y = (i + 0.5) * H / 18;
+        ctx.beginPath();
+        ctx.moveTo(-4, y);
+        ctx.bezierCurveTo(W * 0.22, y - 1.8, W * 0.58, y + 2.2, W + 4, y - 0.8);
+        ctx.strokeStyle = i % 3 === 0 ? 'rgba(130, 82, 39, 0.17)' : 'rgba(255, 248, 229, 0.28)';
+        ctx.lineWidth = i % 3 === 0 ? 0.65 : 0.35;
+        ctx.stroke();
+      }
+      // Petit nœud décoratif, très léger.
+      ctx.beginPath();
+      ctx.ellipse(W * 0.83, H * 0.23, 3.8, 1.25, -0.15, 0, Math.PI * 2);
+      ctx.strokeStyle = 'rgba(130, 82, 39, 0.18)';
+      ctx.lineWidth = 0.55;
+      ctx.stroke();
+      ctx.restore();
+      ctx.save();
+      ctx.shadowColor = 'rgba(77, 57, 91, 0.3)';
+      ctx.shadowBlur = 3.2;
+      ctx.shadowOffsetY = 1.2;
+      roundRect(ctx, 0.8, 0.8, W - 1.6, H - 1.6, 4);
+      ctx.strokeStyle = 'rgba(132, 91, 51, 0.65)';
+      ctx.lineWidth = 0.6;
+      ctx.stroke();
+      ctx.restore();
+    }
 
-    // Compatibilité supplémentaire pour le bouton de sélection WebXR
-    leftController.addEventListener('selectstart', handleVRTrigger);
-    rightController.addEventListener('selectstart', handleVRTrigger);
+    function missDots(ctx, xRight, y, r, gap) {
+      for (let i = 0; i < MAX_MISSES; i++) {
+        const cx = xRight - r - (MAX_MISSES - 1 - i) * gap;
+        ctx.beginPath();
+        ctx.arc(cx, y, r, 0, Math.PI * 2);
+        if (i < GAME.misses) { ctx.fillStyle = C.red; ctx.fill(); }
+        else { ctx.strokeStyle = C.muted; ctx.lineWidth = r * 0.3; ctx.stroke(); }
+      }
+    }
+
+    // Plan texturé par un canvas. On dessine en centimètres.
+    class CanvasPanel {
+      constructor(w, h, ppm = 700) {
+        this.w = w; this.h = h;
+        this.canvas = document.createElement('canvas');
+        this.canvas.width = Math.round(w * ppm);
+        this.canvas.height = Math.round(h * ppm);
+        this.ctx = this.canvas.getContext('2d');
+        this.texture = new THREE.CanvasTexture(this.canvas);
+        setSRGB(this.texture);
+        this.texture.anisotropy = 4;
+        this.material = new THREE.MeshBasicMaterial({ map: this.texture, transparent: true, toneMapped: false });
+        this.mesh = new THREE.Mesh(new THREE.PlaneGeometry(w, h), this.material);
+      }
+      draw(fn) {
+        const c = this.ctx, cv = this.canvas;
+        const W = this.w * 100, H = this.h * 100;
+        c.setTransform(1, 0, 0, 1, 0, 0);
+        c.clearRect(0, 0, cv.width, cv.height);
+        c.setTransform(cv.width / W, 0, 0, cv.height / H, 0, 0);
+        fn(c, W, H);
+        this.texture.needsUpdate = true;
+      }
+    }
+
+    let lastClick = 0;
+    function makeButton({ label, w, h, x, y, onClick, primary = false }) {
+      const panel = new CanvasPanel(w, h, 700);
+      panel.mesh.renderOrder = 2;
+      const el = document.createElement('a-entity');
+      el.setObject3D('mesh', panel.mesh);
+      el.setAttribute('position', `${x} ${y} 0.01`);
+      const b = { el, panel, label, primary, hover: false, selected: false };
+      b.redraw = () => panel.draw((ctx, W, H) => {
+        const radius = Math.min(3, H / 3);
+        ctx.save();
+        ctx.shadowColor = b.hover || b.selected
+          ? 'rgba(142, 112, 177, 0.34)' : 'rgba(81, 62, 91, 0.19)';
+        ctx.shadowBlur = b.hover ? 2.2 : 1.4;
+        ctx.shadowOffsetX = 0;
+        ctx.shadowOffsetY = 0.7;
+        roundRect(ctx, 0.8, 0.8, W - 1.6, H - 1.6, radius);
+        let fill = primary ? C.primary : C.btn;
+        if (b.hover) fill = primary ? C.primaryHover : C.btnHover;
+        if (b.selected) fill = C.accent;
+        ctx.fillStyle = fill;
+        ctx.fill();
+        ctx.restore();
+        roundRect(ctx, 0.8, 0.8, W - 1.6, H - 1.6, radius);
+        ctx.strokeStyle = b.hover || b.selected ? '#b9a0d8' : 'rgba(255,255,255,0.95)';
+        ctx.lineWidth = 0.55;
+        ctx.stroke();
+        text(ctx, b.label, W / 2, H / 2 + 0.2, H * 0.42, 700, C.ink, 'center', W - 4);
+      });
+      el.addEventListener('mouseenter', () => { b.hover = true; b.redraw(); pulse($('rightHand'), 0.15, 15); });
+      el.addEventListener('mouseleave', () => { b.hover = false; b.redraw(); });
+      el.addEventListener('click', () => {
+        const now = performance.now();
+        if (now - lastClick < 300) return;           // les deux curseurs (souris + manette) : un seul clic
+        lastClick = now;
+        pulse($('rightHand'), 0.4, 30);
+        SFX.unlock();
+        onClick();
+      });
+      b.redraw();
+      return b;
+    }
+
+    function refreshRaycasters() {
+      [document.querySelector('a-scene'), $('rightHand')].forEach(el => {
+        try { el.components.raycaster?.refreshObjects(); } catch (e) { /* */ }
+      });
+    }
+
+    // Place un panneau face au joueur, à hauteur des yeux
+    const _p = new THREE.Vector3(), _q = new THREE.Quaternion(), _f = new THREE.Vector3();
+    function placeInFront(rootEl, dist) {
+      const cam = $('camera').object3D;
+      cam.updateMatrixWorld(true);
+      cam.getWorldPosition(_p);
+      cam.getWorldQuaternion(_q);
+      _f.set(0, 0, -1).applyQuaternion(_q);
+      _f.y = 0;
+      if (_f.lengthSq() < 1e-4) _f.set(0, 0, -1);
+      _f.normalize();
+      rootEl.setAttribute('position', { x: _p.x + _f.x * dist, y: _p.y - 0.15, z: _p.z + _f.z * dist });
+      rootEl.setAttribute('rotation', { x: 0, y: THREE.MathUtils.radToDeg(Math.atan2(-_f.x, -_f.z)), z: 0 });
+      // L'ombre reste au sol, sous la projection horizontale du menu.
+      if (rootEl.shadowEl) {
+        rootEl.shadowEl.setAttribute('position', { x: _p.x + _f.x * dist, y: 0.018, z: _p.z + _f.z * dist });
+        rootEl.shadowEl.setAttribute('visible', true);
+      }
+    }
+
+    class Menu {
+      constructor(w, h, drawBg) {
+        this.drawBg = drawBg;
+        this.visible = false;
+        this.root = document.createElement('a-entity');
+        this.root.setAttribute('visible', false);
+        this.bg = new CanvasPanel(w, h, 700);
+        this.bg.mesh.renderOrder = 1;
+        this.bgEl = document.createElement('a-entity');
+        this.bgEl.setObject3D('mesh', this.bg.mesh);
+        this.root.appendChild(this.bgEl);
+        this.buttons = [];
+        // Ombre elliptique au sol, indépendante du panneau vertical.
+        this.shadowEl = document.createElement('a-entity');
+        const shadowMesh = new THREE.Mesh(
+          new THREE.CircleGeometry(0.42, 48),
+          new THREE.MeshBasicMaterial({ color: '#46364b', transparent: true, opacity: 0.2, depthWrite: false })
+        );
+        shadowMesh.rotation.x = -Math.PI / 2;
+        shadowMesh.scale.set(1.65, 0.52, 1);
+        this.shadowEl.setObject3D('mesh', shadowMesh);
+        this.shadowEl.setAttribute('visible', false);
+        this.root.shadowEl = this.shadowEl;
+        document.querySelector('a-scene').appendChild(this.shadowEl);
+        document.querySelector('a-scene').appendChild(this.root);
+      }
+      redraw() {
+        this.bg.draw((ctx, W, H) => { woodPanelBackground(ctx, W, H); this.drawBg(ctx, W, H); });
+      }
+      addButton(opts) {
+        const b = makeButton(opts);
+        this.root.appendChild(b.el);
+        this.buttons.push(b);
+        return b;
+      }
+      setClickable(on) {
+        [this.bgEl, ...this.buttons.map(b => b.el)].forEach(el => el.classList.toggle('clickable', on));
+      }
+      show() {
+        this.redraw();
+        this.buttons.forEach(b => { b.hover = false; b.redraw(); });
+        placeInFront(this.root, 1.4);
+        this.root.setAttribute('visible', true);
+        this.shadowEl.setAttribute('visible', true);
+        this.setClickable(true);
+        this.visible = true;
+      }
+      hide() {
+        this.root.setAttribute('visible', false);
+        this.shadowEl.setAttribute('visible', false);
+        this.setClickable(false);
+        this.visible = false;
+      }
+    }
+
+    // ===== Gestionnaire de partie : tableau, poignet, menus, pause =====
+    AFRAME.registerComponent('game-manager', {
+      init() {
+        const scene = this.el.sceneEl;
+        if (scene.hasLoaded) this.setup();
+        else scene.addEventListener('loaded', () => this.setup());
+      },
+
+      setup() {
+        GAME.stick = $('stick').components['molkky-stick'];
+        GAME.ui = this;
+        this.hudSig = '';
+        this.hudTimer = 0;
+
+        this.buildBoard();
+        this.buildWrist();
+        this.buildMenus();
+
+        // Pause : bouton Y (ou menu) de la manette gauche, Échap ou P au clavier
+        const left = $('leftHand');
+        const togglePause = () => {
+          if (GAME.phase === 'playing') GAME.pause();
+          else if (GAME.phase === 'paused') GAME.resume();
+        };
+        left.addEventListener('ybuttondown', togglePause);
+        left.addEventListener('menudown', togglePause);
+        window.addEventListener('keydown', e => {
+          if (e.key === 'Escape' || e.key.toLowerCase() === 'p') togglePause();
+        });
+
+        // En entrant en VR, la tête change de place : on replace le menu ouvert devant elle
+        this.el.sceneEl.addEventListener('enter-vr', () => {
+          setTimeout(() => {
+            const m = Object.values(this.menus).find(m => m.visible);
+            if (m) placeInFront(m.root, 1.4);
+          }, 600);
+        });
+
+        // Le son démarre au premier geste (exigence des navigateurs)
+        ['pointerdown', 'keydown', 'touchstart'].forEach(ev =>
+          window.addEventListener(ev, () => SFX.unlock(), { capture: true }));
+        this.el.sceneEl.addEventListener('enter-vr', () => SFX.unlock());
+        [left, $('rightHand')].forEach(h => h.addEventListener('triggerdown', () => SFX.unlock()));
+
+        this.ready = true;
+        GAME.toMenu();
+      },
+
+      // ----- Tableau d'affichage derrière les quilles -----
+      buildBoard() {
+        this.board = new CanvasPanel(1.8, 0.95, 700);
+        this.boardEl = document.createElement('a-entity');
+        const face = document.createElement('a-entity');
+        face.setObject3D('mesh', this.board.mesh);
+        this.boardEl.appendChild(face);
+        // Dos et pieds en bois
+        const back = document.createElement('a-box');
+        back.setAttribute('width', 1.84); back.setAttribute('height', 0.99); back.setAttribute('depth', 0.03);
+        back.setAttribute('position', '0 0 -0.02'); back.setAttribute('color', '#5a3d24');
+        this.boardEl.appendChild(back);
+        [-0.8, 0.8].forEach(x => {
+          const leg = document.createElement('a-box');
+          leg.setAttribute('width', 0.05); leg.setAttribute('depth', 0.05); leg.setAttribute('height', 0.8);
+          leg.setAttribute('position', `${x} -0.875 -0.02`);
+          leg.setAttribute('color', '#6b4a2b');
+          this.boardEl.appendChild(leg);
+        });
+        this.el.sceneEl.appendChild(this.boardEl);
+        this.placeBoard(GAME.diff.distance);
+      },
+
+      placeBoard(distance) {
+        this.boardEl.setAttribute('position', { x: 0, y: 1.275, z: -(distance + 1.3) });
+        this.hudSig = '';
+      },
+
+      drawBoard(ctx, W, H) {
+        const g = GAME;
+        panelBackground(ctx, W, H);
+        text(ctx, 'MÖLKKY', 8, 10, 5, 800, C.accent);
+        text(ctx, `Niveau : ${g.diff.label}`, W - 8, 10, 4.2, 700, C.muted, 'right');
+        const rec = SCORES.best(g.difficulty);
+        text(ctx, rec ? `Record : ${rec.throws} lancers · ${fmtTime(rec.ms)}` : 'Record : —',
+             W / 2, 10, 3.8, 700, C.ink, 'center');
+        ctx.fillStyle = 'rgba(255,255,255,0.12)';
+        ctx.fillRect(8, 16, W - 16, 0.3);
+
+        // Score
+        text(ctx, 'SCORE', 8, 24, 3.6, 700, C.muted);
+        text(ctx, String(g.score), 8, 44, 24, 800, C.ink);
+        ctx.font = `800 24px ${FONT}`;
+        const sw = ctx.measureText(String(g.score)).width;
+        text(ctx, `/ ${TARGET}`, 8 + sw + 2.5, 50, 7, 700, C.muted);
+
+        // Barre de progression vers 50
+        roundRect(ctx, 8, 61, 76, 3.5, 1.75);
+        ctx.fillStyle = 'rgba(255,255,255,0.1)'; ctx.fill();
+        if (g.score > 0) {
+          roundRect(ctx, 8, 61, Math.max(3.5, 76 * g.score / TARGET), 3.5, 1.75);
+          ctx.fillStyle = g.score === TARGET ? C.green : C.accent; ctx.fill();
+        }
+        ctx.fillStyle = C.muted;
+        ctx.fillRect(8 + 76 * RESET_TO / TARGET - 0.15, 60, 0.3, 5.5);   // repère des 25 points
+
+        // Séparateur vertical
+        ctx.fillStyle = 'rgba(255,255,255,0.12)';
+        ctx.fillRect(90, 22, 0.3, 46);
+
+        // Colonne des infos
+        const row = (y, label) => {
+          text(ctx, label, 96, y, 4, 600, C.muted);
+        };
+        row(27, 'Lancer');
+        text(ctx, `n° ${g.throwNo}`, 172, 27, 4.6, 800, C.ink, 'right');
+        row(39, 'Dernier lancer');
+        text(ctx, g.lastPoints === null ? '—' : `+${g.lastPoints} pt${g.lastPoints > 1 ? 's' : ''}`,
+             172, 39, 4.6, 800, g.lastPoints === 0 ? C.red : C.ink, 'right');
+        row(51, 'Échecs consécutifs');
+        missDots(ctx, 172, 51, 1.6, 4.8);
+        row(63, 'Temps');
+        text(ctx, fmtTime(g.elapsed), 172, 63, 4.6, 800, C.ink, 'right');
+
+        // Message
+        roundRect(ctx, 8, 73, W - 16, 15, 3);
+        ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fill();
+        text(ctx, g.message, W / 2, 80.8, 4.2, 600, C.ink, 'center', W - 24);
+      },
+
+      // ----- Petit panneau au poignet gauche (lisible en VR sans regarder le tableau) -----
+      buildWrist() {
+        this.wrist = new CanvasPanel(0.17, 0.10, 2400);
+        this.wristEl = document.createElement('a-entity');
+        this.wristEl.setObject3D('mesh', this.wrist.mesh);
+        this.wristEl.setAttribute('position', '0 0.035 0.1');
+        this.wristEl.setAttribute('rotation', '-60 0 0');
+        this.wristEl.setAttribute('visible', false);
+        const left = $('leftHand');
+        left.appendChild(this.wristEl);
+        left.addEventListener('controllerconnected', () => this.wristEl.setAttribute('visible', true));
+        left.addEventListener('controllerdisconnected', () => this.wristEl.setAttribute('visible', false));
+      },
+
+      drawWrist(ctx, W, H) {
+        const g = GAME;
+        roundRect(ctx, 0.1, 0.1, W - 0.2, H - 0.2, 1.2);
+        ctx.fillStyle = C.bg; ctx.fill();
+        ctx.strokeStyle = 'rgba(79, 163, 255, 0.8)'; ctx.lineWidth = 0.15; ctx.stroke();
+        text(ctx, String(g.score), 1.3, 3.6, 4.2, 800, C.ink);
+        ctx.font = `800 4.2px ${FONT}`;
+        const sw = ctx.measureText(String(g.score)).width;
+        text(ctx, `/${TARGET}`, 1.3 + sw + 0.4, 4.4, 1.7, 700, C.muted);
+        text(ctx, fmtTime(g.elapsed), W - 1.3, 2.4, 1.6, 700, C.muted, 'right');
+        text(ctx, `Lancer n° ${g.throwNo}`, W - 1.3, 5, 1.5, 700, C.ink, 'right');
+        ctx.fillStyle = 'rgba(255,255,255,0.12)';
+        ctx.fillRect(1.3, 6.6, W - 2.6, 0.08);
+        text(ctx, g.lastPoints === null ? 'Dernier : —' : `Dernier : +${g.lastPoints}`, 1.3, 8.3, 1.45, 600, C.muted);
+        missDots(ctx, W - 1.3, 8.3, 0.55, 1.6);
+      },
+
+      refreshHud(force) {
+        const g = GAME;
+        const sig = [g.phase, g.difficulty, g.score, g.throwNo, g.lastPoints, g.misses,
+                     Math.floor(g.elapsed / 1000), g.message].join('|');
+        if (!force && sig === this.hudSig) return;
+        this.hudSig = sig;
+        this.board.draw((ctx, W, H) => this.drawBoard(ctx, W, H));
+        this.wrist.draw((ctx, W, H) => this.drawWrist(ctx, W, H));
+
+        const labels = { menu: 'Menu principal', paused: 'Pause', over: 'Partie terminée' };
+        $('statusMsg').textContent = g.phase === 'menu' ? labels.menu :
+          `${labels[g.phase] ? labels[g.phase] + ' · ' : ''}Score ${g.score}/${TARGET} · Lancer n° ${g.throwNo} · ` +
+          `Dernier ${g.lastPoints === null ? '—' : '+' + g.lastPoints} · Échecs ${g.misses}/${MAX_MISSES} · ${fmtTime(g.elapsed)}`;
+      },
+
+      // ----- Menus -----
+      buildMenus() {
+        // Menu principal : règles, choix de la difficulté, Jouer
+        // (positions des boutons : y = H/2 − y_canvas/100, le canvas étant dessiné en cm)
+        const main = new Menu(1.1, 1.3, (ctx, W, H) => {
+          text(ctx, 'Mölkky VR', W / 2, 12, 9, 800, C.accent, 'center');
+          text(ctx, `Atteins exactement ${TARGET} points`, W / 2, 20.5, 3.8, 500, C.muted, 'center');
+
+          roundRect(ctx, 7, 26, W - 14, 27, 2.5);
+          ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fill();
+          const rules = [
+            '1 quille tombée : tu marques son numéro',
+            'Plusieurs quilles : tu marques leur nombre',
+            `Plus de ${TARGET} points : retour à ${RESET_TO}`,
+            `${MAX_MISSES} lancers sans point de suite : perdu`
+          ];
+          rules.forEach((r, i) => {
+            const y = 32 + i * 6;
+            ctx.beginPath(); ctx.arc(12, y, 0.8, 0, Math.PI * 2); ctx.fillStyle = C.accent; ctx.fill();
+            text(ctx, r, 15, y, 3.4, 500, C.ink);
+          });
+
+          text(ctx, 'Difficulté', W / 2, 60, 3.8, 700, C.muted, 'center');
+          wrapText(ctx, GAME.diff.desc, W / 2, 79, W - 16, 3.2, 4.3, C.ink);
+          text(ctx, 'Gâchette droite : choisir un bouton · attraper et lancer la barre', W / 2, 119, 2.8, 500, C.muted, 'center', W - 10);
+          text(ctx, 'Bouton Y (manette gauche) ou Échap : pause', W / 2, 123.5, 2.8, 500, C.muted, 'center', W - 10);
+        });
+        this.diffButtons = {};
+        DIFF_ORDER.forEach((key, i) => {
+          this.diffButtons[key] = main.addButton({
+            label: DIFFICULTIES[key].label, w: 0.3, h: 0.1, x: (i - 1) * 0.33, y: -0.04,
+            onClick: () => GAME.selectDifficulty(key)
+          });
+        });
+        main.addButton({ label: 'Jouer', w: 0.5, h: 0.12, x: 0, y: -0.3, primary: true, onClick: () => GAME.start() });
+        main.addButton({ label: 'Meilleurs scores', w: 0.4, h: 0.09, x: -0.215, y: -0.43, onClick: () => this.openScores('main') });
+        const soundLabel = () => `Son : ${SFX.enabled ? 'activé' : 'coupé'}`;
+        const soundBtn = main.addButton({
+          label: soundLabel(), w: 0.4, h: 0.09, x: 0.215, y: -0.43,
+          onClick: () => { SFX.setEnabled(!SFX.enabled); soundBtn.label = soundLabel(); soundBtn.redraw(); }
+        });
+
+        // Pause
+        const pause = new Menu(0.9, 0.85, (ctx, W, H) => {
+          text(ctx, 'Pause', W / 2, 12, 8, 800, C.accent, 'center');
+          text(ctx, `Score ${GAME.score}/${TARGET} · Lancer n° ${GAME.throwNo}`, W / 2, 23, 3.8, 600, C.ink, 'center');
+          text(ctx, `Échecs ${GAME.misses}/${MAX_MISSES} · Temps ${fmtTime(GAME.elapsed)} · ${GAME.diff.label}`,
+               W / 2, 30, 3.4, 500, C.muted, 'center', W - 8);
+        });
+        pause.addButton({ label: 'Reprendre', w: 0.55, h: 0.1, x: 0, y: -0.055, primary: true, onClick: () => GAME.resume() });
+        pause.addButton({ label: 'Recommencer', w: 0.55, h: 0.1, x: 0, y: -0.175, onClick: () => GAME.start() });
+        pause.addButton({ label: 'Menu principal', w: 0.55, h: 0.1, x: 0, y: -0.295, onClick: () => GAME.toMenu() });
+
+        // Fin de partie : victoire ou défaite
+        const end = new Menu(1.0, 0.9, (ctx, W, H) => {
+          const win = GAME.result === 'win';
+          text(ctx, win ? 'Victoire !' : 'Partie perdue', W / 2, 13, 9, 800, win ? C.green : C.red, 'center');
+          text(ctx, GAME.reason, W / 2, 22.5, 3.8, 500, C.muted, 'center', W - 10);
+
+          roundRect(ctx, 8, 28, W - 16, 32, 2.5);
+          ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fill();
+          const rows = [
+            ['Score final', `${GAME.score} / ${TARGET}`],
+            ['Lancers', String(GAME.throwNo)],
+            ['Temps', fmtTime(GAME.elapsed)],
+            ['Difficulté', GAME.diff.label]
+          ];
+          rows.forEach(([l, v], i) => {
+            const y = 35 + i * 6.8;
+            text(ctx, l, 14, y, 3.8, 600, C.muted);
+            text(ctx, v, W - 14, y, 3.8, 800, C.ink, 'right');
+          });
+
+          // Classement de la partie
+          const rec = GAME.lastRecord;
+          let line = '', color = C.ink;
+          if (win && rec?.rank === 1) {
+            line = rec.total > 1 ? 'Nouveau record !' : 'Premier record enregistré !';
+            color = C.green;
+          } else if (win && rec?.rank) {
+            line = `Classement : ${rec.rank}e sur ${rec.total} victoires${rec.bestTime ? ' · Meilleur temps !' : ''}`;
+          } else {
+            line = `Meilleur score atteint : ${GAME.peak} / ${TARGET}`;
+          }
+          text(ctx, line, W / 2, 65.5, 4.2, 800, color, 'center', W - 12);
+        });
+        end.addButton({ label: 'Rejouer', w: 0.28, h: 0.1, x: -0.31, y: -0.32, primary: true, onClick: () => GAME.start() });
+        end.addButton({ label: 'Scores', w: 0.28, h: 0.1, x: 0, y: -0.32, onClick: () => this.openScores('end') });
+        end.addButton({ label: 'Menu principal', w: 0.28, h: 0.1, x: 0.31, y: -0.32, onClick: () => GAME.toMenu() });
+
+        // Meilleurs scores : un onglet par niveau
+        this.scoresTab = GAME.difficulty;
+        this.scoresBack = 'main';
+        const scores = new Menu(1.1, 1.35, (ctx, W, H) => {
+          const d = this.scoresTab;
+          const st = SCORES.stats(d);
+          text(ctx, 'Meilleurs scores', W / 2, 10, 7.5, 800, C.accent, 'center');
+
+          // Statistiques du niveau
+          roundRect(ctx, 7, 28, W - 14, 16, 2.5);
+          ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fill();
+          [
+            ['Parties', String(st.played)],
+            ['Victoires', String(st.wins)],
+            ['Réussite', `${st.rate} %`],
+            ['Meilleur temps', st.bestMs === null ? '—' : fmtTime(st.bestMs)]
+          ].forEach(([l, v], i) => {
+            const x = 7 + (W - 14) * (i + 0.5) / 4;
+            text(ctx, l, x, 32.5, 2.9, 600, C.muted, 'center', 22);
+            text(ctx, v, x, 39, 4.6, 800, C.ink, 'center', 24);
+          });
+
+          // Top 5 des victoires
+          text(ctx, 'Top 5 des victoires (le moins de lancers)', 9, 50, 3.5, 800, C.ink);
+          const top = SCORES.top(d, 5);
+          const justPlayed = GAME.lastRecord?.entry;
+          if (top.length === 0) {
+            text(ctx, 'Aucune victoire pour l’instant', W / 2, 66, 3.6, 600, C.muted, 'center');
+            if (st.played) text(ctx, `Meilleur score atteint : ${st.bestPeak} / ${TARGET}`, W / 2, 73, 3.6, 700, C.ink, 'center');
+          } else {
+            const cols = [12, 26, 52, 78];
+            ['#', 'Lancers', 'Temps', 'Date'].forEach((h, i) => text(ctx, h, cols[i], 56, 2.9, 700, C.muted));
+            top.forEach((g, i) => {
+              const y = 62 + i * 5.8;
+              if (g === justPlayed) {
+                roundRect(ctx, 8, y - 2.7, W - 16, 5.4, 1.5);
+                ctx.fillStyle = 'rgba(199, 180, 226, 0.45)'; ctx.fill();
+              }
+              text(ctx, String(i + 1), cols[0], y, 3.4, 800, i === 0 ? C.accent : C.ink);
+              text(ctx, String(g.throws), cols[1], y, 3.4, 700, C.ink);
+              text(ctx, fmtTime(g.ms), cols[2], y, 3.4, 700, C.ink);
+              text(ctx, fmtDate(g.at), cols[3], y, 3.2, 500, C.muted);
+            });
+          }
+
+          // Dernières parties
+          text(ctx, 'Dernières parties', 9, 94, 3.5, 800, C.ink);
+          const recent = SCORES.recent(d, 3);
+          if (recent.length === 0) {
+            text(ctx, 'Aucune partie jouée à ce niveau', W / 2, 104, 3.4, 600, C.muted, 'center');
+          } else {
+            recent.forEach((g, i) => {
+              const y = 100.5 + i * 5.8;
+              const win = g.res === 'win';
+              text(ctx, fmtDate(g.at), 10, y, 3.1, 500, C.muted);
+              text(ctx, win ? 'Victoire' : 'Perdue', 36, y, 3.3, 800, win ? C.green : C.red);
+              text(ctx, `${g.score}/${TARGET}`, 58, y, 3.3, 700, C.ink);
+              text(ctx, `${g.throws} lancer${g.throws > 1 ? 's' : ''}`, 74, y, 3.1, 600, C.ink);
+              text(ctx, fmtTime(g.ms), W - 9, y, 3.1, 600, C.ink, 'right');
+            });
+          }
+        });
+        this.scoreTabs = {};
+        DIFF_ORDER.forEach((key, i) => {
+          this.scoreTabs[key] = scores.addButton({
+            label: DIFFICULTIES[key].label, w: 0.3, h: 0.08, x: (i - 1) * 0.33, y: 0.465,
+            onClick: () => this.setScoresTab(key)
+          });
+        });
+        scores.addButton({ label: 'Retour', w: 0.38, h: 0.09, x: -0.21, y: -0.595, primary: true, onClick: () => this.show(this.scoresBack) });
+        // Effacer : il faut appuyer deux fois (confirmation) dans les 3 secondes
+        const CLEAR_LABEL = 'Effacer ce niveau';
+        let confirmAt = 0, confirmTimer = null;
+        this.clearBtn = scores.addButton({
+          label: CLEAR_LABEL, w: 0.38, h: 0.09, x: 0.21, y: -0.595,
+          onClick: () => {
+            clearTimeout(confirmTimer);
+            if (performance.now() - confirmAt < 3000) {
+              SCORES.clear(this.scoresTab);
+              confirmAt = 0;
+              this.clearBtn.label = CLEAR_LABEL;
+              scores.redraw();
+              this.refreshHud(true);
+            } else {
+              confirmAt = performance.now();
+              this.clearBtn.label = 'Confirmer ?';
+              confirmTimer = setTimeout(() => { this.clearBtn.label = CLEAR_LABEL; this.clearBtn.redraw(); }, 3000);
+            }
+            this.clearBtn.redraw();
+          }
+        });
+
+        this.menus = { main, pause, end, scores };
+        this.refreshMain();
+      },
+
+      openScores(from) {
+        this.scoresBack = from;
+        this.scoresTab = GAME.difficulty;
+        this.show('scores');
+      },
+
+      setScoresTab(key) {
+        this.scoresTab = key;
+        this.refreshScoreTabs();
+        this.menus.scores.redraw();
+      },
+
+      refreshScoreTabs() {
+        DIFF_ORDER.forEach(key => {
+          const b = this.scoreTabs[key];
+          b.selected = key === this.scoresTab;
+          b.redraw();
+        });
+      },
+
+      refreshMain() {
+        DIFF_ORDER.forEach(key => {
+          const b = this.diffButtons[key];
+          b.selected = key === GAME.difficulty;
+          b.redraw();
+        });
+        this.menus.main.redraw();
+      },
+
+      setLaser(on) {
+        $('rightHand').setAttribute('raycaster', { enabled: on, showLine: on });
+      },
+
+      show(name) {
+        Object.values(this.menus).forEach(m => m.hide());
+        if (name === 'main') this.refreshMain();
+        this.menus[name].show();
+        if (name === 'scores') this.refreshScoreTabs();
+        this.setLaser(true);
+        refreshRaycasters();
+        this.refreshHud(true);
+      },
+
+      hideMenus() {
+        Object.values(this.menus).forEach(m => m.hide());
+        this.setLaser(false);
+        refreshRaycasters();
+        this.refreshHud(true);
+      },
+
+      tick(time, dtMs) {
+        if (!this.ready) return;
+        // Le menu principal suit continuellement le regard/la direction de la tête.
+        // Il reste affiché tant que GAME.start() n'a pas été déclenché par « Jouer ».
+        if (GAME.phase === 'menu') {
+          // (même chose pour les meilleurs scores ouverts depuis le menu principal)
+          const m = this.menus?.main?.visible ? this.menus.main : (this.menus?.scores?.visible ? this.menus.scores : null);
+          if (m) placeInFront(m.root, 1.4);
+        }
+        SFX.updateListener($('camera').object3D);
+        if (GAME.phase === 'playing') GAME.elapsed += Math.min(dtMs, 100);
+        this.hudTimer += dtMs;
+        if (this.hudTimer >= 150) {
+          this.hudTimer = 0;
+          this.refreshHud(false);
+        }
+      }
+    });
   </script>
 </body>
 </html>
