@@ -1783,7 +1783,12 @@
 
           roundRect(ctx, 7, 26, W - 14, 27, 2.5);
           ctx.fillStyle = 'rgba(255,255,255,0.05)'; ctx.fill();
-          
+          const rules = [
+            '1 quille tombée : tu marques son numéro',
+            'Plusieurs quilles : tu marques leur nombre',
+            `Plus de ${TARGET} points : retour à ${RESET_TO}`,
+            `${MAX_MISSES} lancers sans point de suite : perdu`
+          ];
           rules.forEach((r, i) => {
             const y = 32 + i * 6;
             ctx.beginPath(); ctx.arc(12, y, 0.8, 0, Math.PI * 2); ctx.fillStyle = C.accent; ctx.fill();
